@@ -1,7 +1,7 @@
-// FajarOS v3.0 "Surya" — Preemptive Round-Robin Scheduler
+// FajarOS v3.0 "Surya" — IPC Demo
 //
-// 3 processes: P0 prints '0', P1 prints '1', P2 prints '2'
-// Timer IRQ (20ms) preempts and round-robins between them.
+// P1 sends messages to P2, P2 receives and replies.
+// IPC via shared memory mailbox at 0x47002000.
 //
 // Build: fj build kernel/boot/start.fj --target aarch64-unknown-none --no-std -o fajaros.elf
 // Run:   qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a76 -m 512M -kernel fajaros.elf -nographic
@@ -16,6 +16,56 @@ fn putc(c: i64) {
 fn nl() {
     putc(10)
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// IPC Mailbox (at 0x47002000)
+//
+// Per-process mailbox: 256 bytes each
+// Mailbox[pid] = 0x47002000 + pid * 256
+//   [0]  = status: 0=empty, 1=has_message, 2=has_reply
+//   [8]  = sender PID
+//   [16] = message type
+//   [24] = payload (i64 value)
+// ═══════════════════════════════════════════════════════════════════
+
+fn ipc_send(dest: i64, msg_type: i64, payload: i64) {
+    let mbox = 0x47002000 + dest * 256
+    volatile_write(mbox + 8, volatile_read(0x47001000))
+    volatile_write(mbox + 16, msg_type)
+    volatile_write(mbox + 24, payload)
+    volatile_write(mbox, 1)
+}
+
+fn ipc_has_msg(pid: i64) -> i64 {
+    let mbox = 0x47002000 + pid * 256
+    volatile_read(mbox)
+}
+
+fn ipc_read_payload(pid: i64) -> i64 {
+    let mbox = 0x47002000 + pid * 256
+    volatile_read(mbox + 24)
+}
+
+fn ipc_read_sender(pid: i64) -> i64 {
+    let mbox = 0x47002000 + pid * 256
+    volatile_read(mbox + 8)
+}
+
+fn ipc_clear(pid: i64) {
+    let mbox = 0x47002000 + pid * 256
+    volatile_write(mbox, 0)
+}
+
+fn ipc_reply(dest: i64, payload: i64) {
+    let mbox = 0x47002000 + dest * 256
+    volatile_write(mbox + 8, volatile_read(0x47001000))
+    volatile_write(mbox + 24, payload)
+    volatile_write(mbox, 2)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Scheduler (from Sprint 9)
+// ═══════════════════════════════════════════════════════════════════
 
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
 }
@@ -91,27 +141,67 @@ fn init_stack(top: i64, entry: i64) -> i64 {
     sp
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Process 1: Sender — sends 3 messages to P2, waits for replies
+// ═══════════════════════════════════════════════════════════════════
+
 fn process_1() {
     let mut i = 0
-    while i < 8 {
-        putc(49)
-        asm!("wfi")
+    while i < 3 {
+        // Send message to P2: type=1, payload=i*10
+        ipc_send(2, 1, i * 10)
+        putc(83)
+
+        // Wait for reply
+        let mut waiting = 1
+        while waiting == 1 {
+            asm!("wfi")
+            if ipc_has_msg(1) == 2 {
+                let reply = ipc_read_payload(1)
+                ipc_clear(1)
+                putc(82)
+                waiting = 0
+            }
+        }
         i = i + 1
     }
+    putc(33)
     volatile_write(0x47000108, 3)
     asm!("wfi")
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Process 2: Receiver — receives messages, replies with payload+1
+// ═══════════════════════════════════════════════════════════════════
+
 fn process_2() {
-    let mut i = 0
-    while i < 8 {
-        putc(50)
-        asm!("wfi")
-        i = i + 1
+    let mut count = 0
+    while count < 3 {
+        // Wait for message
+        let mut waiting = 1
+        while waiting == 1 {
+            asm!("wfi")
+            if ipc_has_msg(2) == 1 {
+                let payload = ipc_read_payload(2)
+                let sender = ipc_read_sender(2)
+                ipc_clear(2)
+                putc(77)
+                // Reply with payload + 1
+                ipc_reply(sender, payload + 1)
+                putc(65)
+                waiting = 0
+            }
+        }
+        count = count + 1
     }
+    putc(33)
     volatile_write(0x47000208, 3)
     asm!("wfi")
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Kernel Main
+// ═══════════════════════════════════════════════════════════════════
 
 fn kernel_main() -> i64 {
     putc(70)
@@ -120,23 +210,23 @@ fn kernel_main() -> i64 {
     putc(83)
     nl()
 
-    // P0: kernel (running)
+    // Clear mailboxes
+    let mut m = 0
+    while m < 768 {
+        volatile_write(0x47002000 + m, 0)
+        m = m + 8
+    }
+
+    // Init processes
     volatile_write(0x47000008, 2)
     volatile_write(0x47001000, 0)
     volatile_write(0x47001008, 0)
     volatile_write(0x47001010, 0)
 
-    // P1
     volatile_write(0x47000108, 1)
-    let p1_entry = fn_addr(process_1)
-    let p1_sp = init_stack(0x48010000, p1_entry)
-    volatile_write(0x47000110, p1_sp)
-
-    // P2
+    volatile_write(0x47000110, init_stack(0x48010000, fn_addr(process_1)))
     volatile_write(0x47000208, 1)
-    let p2_entry = fn_addr(process_2)
-    let p2_sp = init_stack(0x48020000, p2_entry)
-    volatile_write(0x47000210, p2_sp)
+    volatile_write(0x47000210, init_stack(0x48020000, fn_addr(process_2)))
 
     // GIC + timer
     init_gic()
@@ -145,23 +235,21 @@ fn kernel_main() -> i64 {
     asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 50)
     asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
 
-    // P0: idle loop
-    let mut i = 0
-    while i < 8 {
-        putc(48)
+    // P0: wait for P1 and P2 to finish
+    let mut done = 0
+    while done < 20 {
         asm!("wfi")
-        i = i + 1
+        let p1_st = volatile_read(0x47000108)
+        let p2_st = volatile_read(0x47000208)
+        if p1_st == 3 {
+            if p2_st == 3 {
+                done = 20
+            }
+        }
+        done = done + 1
     }
 
     asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
-    nl()
-    let ticks = volatile_read(0x47001008)
-    putc(84)
-    if ticks > 9 {
-        putc(43)
-    } else {
-        putc(48 + ticks)
-    }
     nl()
     putc(68)
     putc(79)
