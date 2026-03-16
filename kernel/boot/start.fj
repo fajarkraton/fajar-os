@@ -1,4 +1,8 @@
-// FajarOS v3.0 "Surya" — Preemptive Scheduler
+// FajarOS v3.0 "Surya" — Preemptive Round-Robin Scheduler
+//
+// 3 processes share CPU via timer IRQ preemption.
+// Each process prints its PID, uses WFI to yield CPU time.
+// Context switch via SP swap in IRQ handler assembly.
 //
 // Build: fj build kernel/boot/start.fj --target aarch64-unknown-none --no-std -o fajaros.elf
 // Run:   qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a76 -m 512M -kernel fajaros.elf -nographic
@@ -14,22 +18,90 @@ fn nl() {
     putc(10)
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Process Table Layout (at 0x47000000)
+//   Each slot: 256 bytes → [0]=pid, [8]=state, [16]=saved_sp
+//   0x47001000 = current PID
+//   0x47001008 = tick count
+//   0x47001010 = new_sp (context switch flag, 0=no switch)
+//   0x47001018 = saved_sp (written by IRQ assembly)
+//
+// States: 0=free, 1=ready, 2=running, 3=done
+//
+// Process stacks:
+//   P0 (kernel): uses main kernel stack
+//   P1: 0x48000000-0x4800FFFF (64KB)
+//   P2: 0x48010000-0x4801FFFF (64KB)
+// ═══════════════════════════════════════════════════════════════════
+
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
 }
 
 fn fj_exception_irq() {
+    let saved_sp = volatile_read(0x47001018)
+
     let mut irq = 0
     asm!("mrs x0, ICC_IAR1_EL1", out("x0") irq)
+
     if irq == 30 {
+        // Tick
         let ticks = volatile_read(0x47001008) + 1
         volatile_write(0x47001008, ticks)
+
+        // Re-arm timer (20ms quantum)
         let mut freq = 0
         asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
         asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 50)
         asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
+
+        // Save current process SP
+        let cur = volatile_read(0x47001000)
+        volatile_write(0x47000000 + cur * 256 + 16, saved_sp)
+
+        // Mark current as ready (if still running)
+        let cur_state = volatile_read(0x47000000 + cur * 256 + 8)
+        if cur_state == 2 {
+            volatile_write(0x47000000 + cur * 256 + 8, 1)
+        }
+
+        // Round-robin: find next ready process
+        let mut next = cur + 1
+        if next > 2 {
+            next = 0
+        }
+        let mut checked = 0
+        let mut found = 0
+        while checked < 3 {
+            let st = volatile_read(0x47000000 + next * 256 + 8)
+            if st == 1 {
+                found = 1
+                checked = 3
+            } else {
+                next = next + 1
+                if next > 2 {
+                    next = 0
+                }
+                checked = checked + 1
+            }
+        }
+
+        // Switch if different process found
+        if found == 1 {
+            if next != cur {
+                volatile_write(0x47000000 + next * 256 + 8, 2)
+                volatile_write(0x47001000, next)
+                let next_sp = volatile_read(0x47000000 + next * 256 + 16)
+                volatile_write(0x47001010, next_sp)
+            }
+        }
     }
+
     asm!("msr ICC_EOIR1_EL1, x0", in("x0") irq)
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// GIC Init
+// ═══════════════════════════════════════════════════════════════════
 
 fn init_gic() {
     volatile_write_u32(0x08000000, 0)
@@ -44,6 +116,32 @@ fn init_gic() {
     irq_enable()
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Initialize fake context frame on process stack
+// The SAVE_CONTEXT macro saves 256 bytes:
+//   [0-239]: x0-x29 pairs (30 regs × 8 bytes = 240)
+//   [240]: x30 (LR)
+//   [248]: ELR_EL1 (return address)
+// So the initial SP = stack_top - 256, with ELR = entry point
+// ═══════════════════════════════════════════════════════════════════
+
+fn init_process_stack(stack_top: i64, entry: i64) -> i64 {
+    let sp = stack_top - 256
+    // Zero all saved registers
+    let mut i = 0
+    while i < 256 {
+        volatile_write(sp + i, 0)
+        i = i + 8
+    }
+    // Set ELR_EL1 (at offset 248) to entry point
+    volatile_write(sp + 248, entry)
+    sp
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Kernel Main — Process 0
+// ═══════════════════════════════════════════════════════════════════
+
 fn kernel_main() -> i64 {
     putc(70)
     putc(106)
@@ -51,36 +149,48 @@ fn kernel_main() -> i64 {
     putc(83)
     nl()
 
-    // Scheduler init BEFORE GIC (no IRQs yet)
+    // Init process table (before GIC/IRQs)
+    // P0: kernel, running
+    volatile_write(0x47000000, 0)
     volatile_write(0x47000008, 2)
+    volatile_write(0x47000010, 0)
+    // P1: ready, stack at 0x4800FFFF
+    volatile_write(0x47000100, 1)
+    volatile_write(0x47000108, 1)
+    let p1_sp = init_process_stack(0x48010000, 0)
+    volatile_write(0x47000110, p1_sp)
+    // P2: ready, stack at 0x4801FFFF
+    volatile_write(0x47000200, 2)
+    volatile_write(0x47000208, 1)
+    let p2_sp = init_process_stack(0x48020000, 0)
+    volatile_write(0x47000210, p2_sp)
+
     volatile_write(0x47001000, 0)
     volatile_write(0x47001008, 0)
     volatile_write(0x47001010, 0)
+    volatile_write(0x47001018, 0)
 
     // GIC + IRQ enable
     init_gic()
-    putc(71)
-    nl()
 
-    // Timer
+    // Start timer (20ms quantum)
     let mut freq = 0
     asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
     asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 50)
     asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
 
-    // Idle loop (process 0)
+    // Process 0: idle loop with WFI
     let mut i = 0
     while i < 10 {
         putc(48)
-        let mut d = 0
-        while d < 200000 {
-            d = d + 1
-        }
+        asm!("wfi")
         i = i + 1
     }
+
+    // Stop timer
+    asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
     nl()
 
-    asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
     let ticks = volatile_read(0x47001008)
     putc(84)
     if ticks > 9 {
