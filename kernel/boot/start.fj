@@ -218,6 +218,16 @@ fn cmd_help() {
     help_line(99, 97, 108, 99, 32, 46)
     // "  reboot"
     help_line(114, 101, 98, 111, 111, 116)
+    // "  time ."
+    help_line(116, 105, 109, 101, 32, 46)
+    // "  seq  ."
+    help_line(115, 101, 113, 32, 32, 46)
+    // "  xxd  ."
+    help_line(120, 120, 100, 32, 32, 46)
+    // "  rand  "
+    help_line(114, 97, 110, 100, 32, 32)
+    // "  loops."
+    help_line(108, 111, 111, 112, 115, 46)
 }
 
 fn cmd_ps() {
@@ -1165,6 +1175,137 @@ fn cmd_calc() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Sprint 36.extra batch 2: time, seq, xxd, rand, loops
+// ═══════════════════════════════════════════════════════════════════
+
+fn cmd_is_time() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 116 { if cmd_char(1) == 105 { if cmd_char(2) == 109 { if cmd_char(3) == 101 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_time() {
+    // "time <cmd>" — measure execution time of another command
+    // Just measure sleep for now
+    let ms = parse_num_from(5)
+    let t0 = timer_ticks()
+    let f = timer_freq()
+    let target = t0 + f / 1000 * ms
+    let mut now = t0
+    while now < target {
+        now = timer_ticks()
+    }
+    let elapsed_us = (now - t0) / (f / 1000000)
+    print_num(elapsed_us)
+    putc(117)
+    putc(115)
+    nl()
+}
+
+fn cmd_is_seq() -> i64 {
+    let len = cmd_len()
+    if len < 5 { 0 }
+    else { if cmd_char(0) == 115 { if cmd_char(1) == 101 { if cmd_char(2) == 113 { if cmd_char(3) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_seq() {
+    // "seq <n>" — print numbers 1 to n
+    let n = parse_num_from(4)
+    let mut i = 1
+    while i <= n {
+        print_num(i)
+        putc(32)
+        i = i + 1
+    }
+    nl()
+}
+
+fn cmd_is_xxd() -> i64 {
+    let len = cmd_len()
+    if len < 5 { 0 }
+    else { if cmd_char(0) == 120 { if cmd_char(1) == 120 { if cmd_char(2) == 100 { if cmd_char(3) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_xxd() {
+    // "xxd <addr>" — 256-byte hex dump (16 rows)
+    let base = parse_num_from(4)
+    let mut row = 0
+    while row < 16 {
+        let addr = base + row * 16
+        print_hex32(addr)
+        putc(58)
+        let mut col = 0
+        while col < 16 {
+            if (col & 1) == 0 {
+                putc(32)
+            }
+            print_hex_byte(volatile_read_u8(addr + col))
+            col = col + 1
+        }
+        putc(32)
+        let mut col2 = 0
+        while col2 < 16 {
+            let b = volatile_read_u8(addr + col2)
+            if b >= 32 {
+                if b < 127 {
+                    putc(b)
+                } else {
+                    putc(46)
+                }
+            } else {
+                putc(46)
+            }
+            col2 = col2 + 1
+        }
+        nl()
+        row = row + 1
+    }
+}
+
+fn cmd_is_rand() -> i64 {
+    let len = cmd_len()
+    if len != 4 { 0 }
+    else { if cmd_char(0) == 114 { if cmd_char(1) == 97 { if cmd_char(2) == 110 { if cmd_char(3) == 100 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_rand() {
+    // Pseudo-random using timer ticks as seed
+    let t = timer_ticks()
+    let r = ((t * 6364136223846793005) + 1442695040888963407) & 0x7FFFFFFF
+    let val = r & 0xFFFF
+    print_num(val)
+    nl()
+}
+
+fn cmd_is_loops() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 108 { if cmd_char(1) == 111 { if cmd_char(2) == 111 { if cmd_char(3) == 112 { if cmd_char(4) == 115 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_loops() {
+    // "loops <n>" — run N million iterations, show time
+    let millions = parse_num_from(6)
+    let count = millions * 1000000
+    let t0 = timer_ticks()
+    let mut i = 0
+    while i < count {
+        i = i + 1
+    }
+    let t1 = timer_ticks()
+    let f = timer_freq()
+    let us = (t1 - t0) / (f / 1000000)
+    print_num(millions)
+    putc(77)
+    putc(58)
+    putc(32)
+    print_num(us)
+    putc(117)
+    putc(115)
+    nl()
+}
+
 fn cmd_is_reboot() -> i64 {
     let len = cmd_len()
     if len != 6 { 0 }
@@ -1477,6 +1618,26 @@ fn execute_cmd() {
         }
         if cmd_is_reboot() == 1 {
             cmd_reboot()
+            handled = 1
+        }
+        if cmd_is_time() == 1 {
+            cmd_time()
+            handled = 1
+        }
+        if cmd_is_seq() == 1 {
+            cmd_seq()
+            handled = 1
+        }
+        if cmd_is_xxd() == 1 {
+            cmd_xxd()
+            handled = 1
+        }
+        if cmd_is_rand() == 1 {
+            cmd_rand()
+            handled = 1
+        }
+        if cmd_is_loops() == 1 {
+            cmd_loops()
             handled = 1
         }
         if handled == 0 {
