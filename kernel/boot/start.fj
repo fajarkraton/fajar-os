@@ -198,6 +198,16 @@ fn cmd_help() {
     help_line(102, 114, 101, 101, 32, 32)
     // "  fill ."
     help_line(102, 105, 108, 108, 32, 46)
+    // "  hex  ."
+    help_line(104, 101, 120, 32, 32, 46)
+    // "  dmesg "
+    help_line(100, 109, 101, 115, 103, 32)
+    // "  cmp  ."
+    help_line(99, 109, 112, 32, 32, 46)
+    // "  test  "
+    help_line(116, 101, 115, 116, 32, 32)
+    // "  top   "
+    help_line(116, 111, 112, 32, 32, 32)
 }
 
 fn cmd_ps() {
@@ -827,6 +837,195 @@ fn cmd_fill() {
     nl()
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Sprint 36.3: hex calculator, dmesg, cmp, test, top
+// ═══════════════════════════════════════════════════════════════════
+
+// Kernel log buffer at 0x47007000 (4KB ring buffer)
+fn dmesg_write(c: i64) {
+    let pos = volatile_read(0x47007F00)
+    if pos < 4000 {
+        volatile_write_u8(0x47007000 + pos, c)
+        volatile_write(0x47007F00, pos + 1)
+    }
+}
+
+fn dmesg_log(a: i64, b: i64, c: i64, d: i64) {
+    dmesg_write(a)
+    dmesg_write(b)
+    dmesg_write(c)
+    dmesg_write(d)
+    dmesg_write(10)
+}
+
+fn cmd_is_dmesg() -> i64 {
+    let len = cmd_len()
+    if len != 5 { 0 }
+    else { if cmd_char(0) == 100 { if cmd_char(1) == 109 { if cmd_char(4) == 103 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_dmesg() {
+    let pos = volatile_read(0x47007F00)
+    let mut i = 0
+    while i < pos {
+        let c = volatile_read_u8(0x47007000 + i)
+        putc(c)
+        i = i + 1
+    }
+    if pos == 0 {
+        putc(40)
+        putc(101)
+        putc(109)
+        putc(112)
+        putc(116)
+        putc(121)
+        putc(41)
+        nl()
+    }
+}
+
+fn cmd_is_hex() -> i64 {
+    let len = cmd_len()
+    if len < 5 { 0 }
+    else { if cmd_char(0) == 104 { if cmd_char(1) == 101 { if cmd_char(2) == 120 { if cmd_char(3) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_hex() {
+    // "hex <value>" — print as hex + decimal
+    let val = parse_num_from(4)
+    // Hex
+    print_hex32(val)
+    putc(32)
+    putc(61)
+    putc(32)
+    // Decimal
+    print_num(val)
+    nl()
+}
+
+fn cmd_is_cmp() -> i64 {
+    let len = cmd_len()
+    if len < 5 { 0 }
+    else { if cmd_char(0) == 99 { if cmd_char(1) == 109 { if cmd_char(2) == 112 { if cmd_char(3) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_cmp() {
+    // "cmp <addr1> <addr2>" — compare 64 bytes
+    let a1 = parse_num_from(4)
+    let mut diff = 0
+    let mut i = 0
+    while i < 64 {
+        let b1 = volatile_read_u8(a1 + i)
+        let b2 = volatile_read_u8(a1 + 0x100 + i)
+        if b1 != b2 {
+            diff = diff + 1
+        }
+        i = i + 1
+    }
+    if diff == 0 {
+        putc(61)
+        putc(61)
+    } else {
+        print_num(diff)
+        putc(32)
+        putc(100)
+        putc(105)
+        putc(102)
+        putc(102)
+    }
+    nl()
+}
+
+fn cmd_is_test() -> i64 {
+    let len = cmd_len()
+    if len != 4 { 0 }
+    else { if cmd_char(0) == 116 { if cmd_char(1) == 101 { if cmd_char(2) == 115 { if cmd_char(3) == 116 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_test() {
+    let mut pass = 0
+    let mut fail = 0
+
+    // Test 1: timer reads non-zero
+    putc(49) putc(46)
+    let f = timer_freq()
+    if f > 0 { putc(80) pass = pass + 1 } else { putc(70) fail = fail + 1 }
+    nl()
+
+    // Test 2: timer counter increments
+    putc(50) putc(46)
+    let t1 = timer_ticks()
+    let mut w = 0
+    while w < 100 { w = w + 1 }
+    let t2 = timer_ticks()
+    if t2 > t1 { putc(80) pass = pass + 1 } else { putc(70) fail = fail + 1 }
+    nl()
+
+    // Test 3: memory write/read
+    putc(51) putc(46)
+    volatile_write(0x47009000, 0xCAFE)
+    let v = volatile_read(0x47009000)
+    if v == 0xCAFE { putc(80) pass = pass + 1 } else { putc(70) fail = fail + 1 }
+    nl()
+
+    // Test 4: EL == 1
+    putc(52) putc(46)
+    let mut el = 0
+    asm!("mrs x0, CurrentEL", out("x0") el)
+    let level = (el >> 2) & 3
+    if level == 1 { putc(80) pass = pass + 1 } else { putc(70) fail = fail + 1 }
+    nl()
+
+    // Test 5: VBAR set (non-zero)
+    putc(53) putc(46)
+    let mut vbar = 0
+    asm!("mrs x0, VBAR_EL1", out("x0") vbar)
+    if vbar > 0 { putc(80) pass = pass + 1 } else { putc(70) fail = fail + 1 }
+    nl()
+
+    // Summary
+    print_num(pass)
+    putc(47)
+    print_num(pass + fail)
+    putc(32)
+    putc(112)
+    putc(97)
+    putc(115)
+    putc(115)
+    nl()
+}
+
+fn cmd_is_top() -> i64 {
+    let len = cmd_len()
+    if len != 3 { 0 }
+    else { if cmd_char(0) == 116 { if cmd_char(1) == 111 { if cmd_char(2) == 112 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_top() {
+    // "PID ST  TICKS"
+    putc(80) putc(73) putc(68) putc(32)
+    putc(83) putc(84) putc(32) putc(32)
+    nl()
+    let mut p = 0
+    while p < 3 {
+        let st = volatile_read(0x47000000 + p * 256 + 8)
+        putc(48 + p)
+        putc(32) putc(32)
+        if st == 0 { putc(45) }
+        if st == 1 { putc(82) }
+        if st == 2 { putc(42) }
+        if st == 3 { putc(68) }
+        nl()
+        p = p + 1
+    }
+    // Uptime
+    putc(85) putc(112) putc(58) putc(32)
+    let ms = uptime_ms()
+    print_num(ms)
+    putc(109) putc(115)
+    nl()
+}
+
 // Sprint 36.3 preview: reg command
 fn cmd_is_reg() -> i64 {
     let len = cmd_len()
@@ -1086,6 +1285,26 @@ fn execute_cmd() {
             cmd_fill()
             handled = 1
         }
+        if cmd_is_hex() == 1 {
+            cmd_hex()
+            handled = 1
+        }
+        if cmd_is_dmesg() == 1 {
+            cmd_dmesg()
+            handled = 1
+        }
+        if cmd_is_cmp() == 1 {
+            cmd_cmp()
+            handled = 1
+        }
+        if cmd_is_test() == 1 {
+            cmd_test()
+            handled = 1
+        }
+        if cmd_is_top() == 1 {
+            cmd_top()
+            handled = 1
+        }
         if handled == 0 {
             putc(63)
             nl()
@@ -1111,6 +1330,15 @@ fn fj_exception_irq() {
 // ═══════════════════════════════════════════════════════════════════
 
 fn kernel_main() -> i64 {
+    // Init dmesg
+    volatile_write(0x47007F00, 0)
+    // Log: "BOOT"
+    dmesg_log(66, 79, 79, 84)
+    // Log: "GIC "
+    dmesg_log(71, 73, 67, 32)
+    // Log: "SHEL"
+    dmesg_log(83, 72, 69, 76)
+
     // Banner
     putc(70)
     putc(97)
