@@ -1,0 +1,60 @@
+// FajarOS — GPIO Driver
+//
+// QEMU PL011: no GPIO, simulated via memory
+// QCS6490 TLMM: 0x0F10_0000, real GPIO mux
+//
+// API:
+//   gpio_init()
+//   gpio_set_dir(pin, dir)   — 0=input, 1=output
+//   gpio_write(pin, val)     — 0=low, 1=high
+//   gpio_read(pin) -> i64    — returns 0 or 1
+//   gpio_toggle(pin)
+
+// TLMM register offsets per pin (QCS6490)
+// Each GPIO has 3 registers at TLMM_BASE + pin * 0x1000:
+//   CFG (0x0): function, pull, drive strength
+//   IN  (0x4): input value
+//   OUT (0xC): output control (bit 1 = value, bit 0 = OE)
+
+fn gpio_cfg_addr(pin: i64) -> i64 {
+    0x0F100000 + pin * 0x1000
+}
+
+fn gpio_in_addr(pin: i64) -> i64 {
+    0x0F100000 + pin * 0x1000 + 4
+}
+
+fn gpio_out_addr(pin: i64) -> i64 {
+    0x0F100000 + pin * 0x1000 + 12
+}
+
+fn gpio_set_dir(pin: i64, dir: i64) {
+    let addr = gpio_out_addr(pin)
+    let val = volatile_read_u32(addr)
+    if dir == 1 {
+        volatile_write_u32(addr, val | 1)
+    } else {
+        volatile_write_u32(addr, val & 0xFFFFFFFE)
+    }
+}
+
+fn gpio_write(pin: i64, high: i64) {
+    let addr = gpio_out_addr(pin)
+    let val = volatile_read_u32(addr)
+    if high == 1 {
+        volatile_write_u32(addr, val | 2)
+    } else {
+        volatile_write_u32(addr, val & 0xFFFFFFFD)
+    }
+}
+
+fn gpio_read(pin: i64) -> i64 {
+    let addr = gpio_in_addr(pin)
+    volatile_read_u32(addr) & 1
+}
+
+fn gpio_toggle(pin: i64) {
+    let addr = gpio_out_addr(pin)
+    let val = volatile_read_u32(addr)
+    volatile_write_u32(addr, val ^ 2)
+}
