@@ -154,6 +154,58 @@ fn init_mmu() -> i64 {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// Exception Handlers (called from assembly vector stubs)
+// ═══════════════════════════════════════════════════════════════════
+
+// Sync exception handler: dispatches SVC, data abort, etc.
+// Called with: x0=ESR_EL1, x1=ELR_EL1, x2=FAR_EL1
+fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
+    // Extract EC (Exception Class) from ESR bits [31:26]
+    let ec = (esr >> 26) & 63
+
+    if ec == 21 {
+        // EC=0x15: SVC instruction (syscall)
+        // "SVC"
+        putc(83)
+        putc(86)
+        putc(67)
+        newline()
+    } else {
+        if ec == 36 {
+            // EC=0x24: Data abort from lower EL
+            putc(68)
+            putc(65)
+            putc(66)
+            putc(84)
+            newline()
+        } else {
+            if ec == 37 {
+                // EC=0x25: Data abort from current EL
+                putc(68)
+                putc(65)
+                putc(66)
+                putc(84)
+                newline()
+            } else {
+                // Unknown exception
+                putc(69)
+                putc(88)
+                putc(67)
+                newline()
+            }
+        }
+    }
+}
+
+// IRQ handler (stub — will be expanded with GIC in Sprint 8)
+fn fj_exception_irq() {
+    putc(73)
+    putc(82)
+    putc(81)
+    newline()
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // Kernel Main
 // ═══════════════════════════════════════════════════════════════════
 
@@ -170,6 +222,12 @@ fn kernel_main() -> i64 {
     let mmu_r = init_mmu()
     print_ok()
 
+    // EXC: test SVC exception → should print "SVC" then return
+    print_label(69, 88, 67)
+    asm!("svc #0")
+    print_ok()
+
+    // BOOT OK
     putc(66)
     putc(79)
     putc(79)
