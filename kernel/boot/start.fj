@@ -270,6 +270,8 @@ fn cmd_help() {
     help_line(108, 115, 102, 97, 116, 32)
     // "  catfat"
     help_line(99, 97, 116, 102, 97, 116)
+    // "  df    "
+    help_line(100, 102, 32, 32, 32, 32)
 }
 
 fn cmd_ps() {
@@ -1962,6 +1964,63 @@ fn cmd_catfat() {
     }
 }
 
+fn cmd_is_df() -> i64 {
+    let len = cmd_len()
+    if len != 2 { 0 }
+    else { if cmd_char(0) == 100 { if cmd_char(1) == 102 { 1 } else { 0 } } else { 0 } }
+}
+
+fn cmd_df() {
+    if fat_mounted() == 1 {
+        let bps = volatile_read(0x4700C008)
+        let total = volatile_read(0x4700C028)
+        // "FAT disk:"
+        putc(70) putc(65) putc(84) putc(58) putc(32)
+        // Count used entries
+        let base = volatile_read(0x4700C000)
+        let root = volatile_read(0x4700C038)
+        let mut used = 0
+        let mut i = 0
+        while i < total {
+            let entry = base + root + i * 32
+            let first = volatile_read_u8(entry)
+            if first != 0 {
+                if first != 0xE5 {
+                    let attr = volatile_read_u8(entry + 11)
+                    if attr != 0x0F {
+                        used = used + 1
+                    }
+                }
+            }
+            i = i + 1
+        }
+        print_num(used)
+        putc(47)
+        print_num(total)
+        putc(32)
+        putc(101)
+        putc(110)
+        putc(116)
+        nl()
+    } else {
+        // RAM FS info
+        putc(82) putc(65) putc(77) putc(58) putc(32)
+        let mut used = 0
+        let mut j = 0
+        while j < 16 {
+            if volatile_read_u8(0x47008000 + j * 128 + 63) > 0 {
+                used = used + 1
+            }
+            j = j + 1
+        }
+        print_num(used)
+        putc(47)
+        putc(49)
+        putc(54)
+        nl()
+    }
+}
+
 fn cmd_is_ls() -> i64 {
     let len = cmd_len()
     if len != 2 { 0 }
@@ -2717,6 +2776,10 @@ fn execute_cmd() {
         }
         if cmd_is_catfat() == 1 {
             cmd_catfat()
+            handled = 1
+        }
+        if cmd_is_df() == 1 {
+            cmd_df()
             handled = 1
         }
         if handled == 0 {
