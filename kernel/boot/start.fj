@@ -188,6 +188,16 @@ fn cmd_help() {
     help_line(114, 101, 103, 32, 32, 32)
     // "  bench "
     help_line(98, 101, 110, 99, 104, 32)
+    // "  env   "
+    help_line(101, 110, 118, 32, 32, 32)
+    // "  export"
+    help_line(101, 120, 112, 111, 114, 116)
+    // "  kill ."
+    help_line(107, 105, 108, 108, 32, 46)
+    // "  free  "
+    help_line(102, 114, 101, 101, 32, 32)
+    // "  fill ."
+    help_line(102, 105, 108, 108, 32, 46)
 }
 
 fn cmd_ps() {
@@ -645,6 +655,178 @@ fn cmd_history() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Sprint 36.1 continued: env, export
+// Env vars stored at 0x47006000 (16 slots × 128 bytes)
+// Each slot: [0-63]=key, [64-127]=value
+// ═══════════════════════════════════════════════════════════════════
+
+fn env_count() -> i64 {
+    volatile_read(0x47006800)
+}
+
+fn cmd_is_env() -> i64 {
+    let len = cmd_len()
+    if len != 3 { 0 }
+    else { if cmd_char(0) == 101 { if cmd_char(1) == 110 { if cmd_char(2) == 118 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_env() {
+    let count = env_count()
+    if count == 0 {
+        putc(40)
+        putc(101)
+        putc(109)
+        putc(112)
+        putc(116)
+        putc(121)
+        putc(41)
+        nl()
+    } else {
+        let mut i = 0
+        while i < count {
+            let base = 0x47006000 + i * 128
+            let mut j = 0
+            let mut c = volatile_read_u8(base + j)
+            while c != 0 {
+                putc(c)
+                j = j + 1
+                c = volatile_read_u8(base + j)
+            }
+            putc(61)
+            j = 0
+            c = volatile_read_u8(base + 64 + j)
+            while c != 0 {
+                putc(c)
+                j = j + 1
+                c = volatile_read_u8(base + 64 + j)
+            }
+            nl()
+            i = i + 1
+        }
+    }
+}
+
+fn cmd_is_export() -> i64 {
+    let len = cmd_len()
+    if len < 8 { 0 }
+    else { if cmd_char(0) == 101 { if cmd_char(1) == 120 { if cmd_char(5) == 116 { if cmd_char(6) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_export() {
+    // "export KEY=VALUE"
+    let len = cmd_len()
+    let count = env_count()
+    if count >= 16 {
+        putc(102)
+        putc(117)
+        putc(108)
+        putc(108)
+        nl()
+    } else {
+        let base = 0x47006000 + count * 128
+        // Copy key (from pos 7 to '=')
+        let mut i = 7
+        let mut ki = 0
+        while i < len {
+            let c = cmd_char(i)
+            if c == 61 {
+                volatile_write_u8(base + ki, 0)
+                i = i + 1
+                // Copy value
+                let mut vi = 0
+                while i < len {
+                    volatile_write_u8(base + 64 + vi, cmd_char(i))
+                    vi = vi + 1
+                    i = i + 1
+                }
+                volatile_write_u8(base + 64 + vi, 0)
+                i = len
+            } else {
+                volatile_write_u8(base + ki, c)
+                ki = ki + 1
+                i = i + 1
+            }
+        }
+        volatile_write(0x47006800, count + 1)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Sprint 36.2: Process commands (run, kill)
+// ═══════════════════════════════════════════════════════════════════
+
+fn cmd_is_kill() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 107 { if cmd_char(1) == 105 { if cmd_char(2) == 108 { if cmd_char(3) == 108 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_kill() {
+    let pid = parse_num_from(5)
+    if pid == 0 {
+        putc(63)
+        nl()
+    } else {
+        if pid > 2 {
+            putc(63)
+            nl()
+        } else {
+            volatile_write(0x47000000 + pid * 256 + 8, 3)
+            putc(75)
+            putc(105)
+            putc(108)
+            putc(108)
+            putc(101)
+            putc(100)
+            putc(32)
+            putc(80)
+            putc(48 + pid)
+            nl()
+        }
+    }
+}
+
+fn cmd_is_free() -> i64 {
+    let len = cmd_len()
+    if len != 4 { 0 }
+    else { if cmd_char(0) == 102 { if cmd_char(1) == 114 { if cmd_char(2) == 101 { if cmd_char(3) == 101 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_free() {
+    // Kernel text
+    putc(84) putc(101) putc(120) putc(116) putc(58) putc(32)
+    putc(126) putc(56) putc(75) putc(66) nl()
+    // Stack
+    putc(83) putc(116) putc(107) putc(58) putc(32) putc(32)
+    putc(54) putc(52) putc(75) putc(66) nl()
+    // Process stacks (2 × 64KB)
+    putc(80) putc(114) putc(111) putc(99) putc(58) putc(32)
+    putc(49) putc(50) putc(56) putc(75) putc(66) nl()
+    // Page tables
+    putc(80) putc(84) putc(58) putc(32) putc(32) putc(32)
+    putc(49) putc(54) putc(77) putc(66) nl()
+}
+
+fn cmd_is_fill() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 102 { if cmd_char(1) == 105 { if cmd_char(2) == 108 { if cmd_char(3) == 108 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_fill() {
+    // "fill <addr> <len> <val>"
+    let addr = parse_num_from(5)
+    // Simple: fill 256 bytes with 0
+    let mut i = 0
+    while i < 256 {
+        volatile_write_u8(addr + i, 0)
+        i = i + 1
+    }
+    putc(50) putc(53) putc(54) putc(32) putc(98) putc(121) putc(116) putc(101) putc(115)
+    nl()
+}
+
 // Sprint 36.3 preview: reg command
 fn cmd_is_reg() -> i64 {
     let len = cmd_len()
@@ -882,6 +1064,26 @@ fn execute_cmd() {
         }
         if cmd_is_bench() == 1 {
             cmd_bench()
+            handled = 1
+        }
+        if cmd_is_env() == 1 {
+            cmd_env()
+            handled = 1
+        }
+        if cmd_is_export() == 1 {
+            cmd_export()
+            handled = 1
+        }
+        if cmd_is_kill() == 1 {
+            cmd_kill()
+            handled = 1
+        }
+        if cmd_is_free() == 1 {
+            cmd_free()
+            handled = 1
+        }
+        if cmd_is_fill() == 1 {
+            cmd_fill()
             handled = 1
         }
         if handled == 0 {
