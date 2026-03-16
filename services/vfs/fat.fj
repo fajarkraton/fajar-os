@@ -1,0 +1,117 @@
+// FajarOS — FAT12/16 Filesystem Reader
+//
+// Reads FAT filesystem from a block device (memory-mapped).
+// Supports: directory listing, file read, file size.
+//
+// FAT12/16 Boot Sector (BPB) layout:
+//   [0-2]   Jump instruction
+//   [3-10]  OEM name
+//   [11-12] Bytes per sector (usually 512)
+//   [13]    Sectors per cluster
+//   [14-15] Reserved sectors
+//   [16]    Number of FATs
+//   [17-18] Root directory entries (FAT12/16)
+//   [19-20] Total sectors (16-bit)
+//   [22-23] Sectors per FAT
+//   [36-39] Total sectors (32-bit, if [19-20]=0)
+
+// FAT Directory Entry (32 bytes):
+//   [0-10]  Filename (8.3 format, space-padded)
+//   [11]    Attributes (0x10=directory, 0x20=archive)
+//   [26-27] First cluster (low 16 bits)
+//   [28-31] File size
+
+// Read 16-bit little-endian from address
+fn read_u16(addr: i64) -> i64 {
+    let lo = volatile_read_u8(addr)
+    let hi = volatile_read_u8(addr + 1)
+    lo + hi * 256
+}
+
+// Read 32-bit little-endian from address
+fn read_u32(addr: i64) -> i64 {
+    let b0 = volatile_read_u8(addr)
+    let b1 = volatile_read_u8(addr + 1)
+    let b2 = volatile_read_u8(addr + 2)
+    let b3 = volatile_read_u8(addr + 3)
+    b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+// FAT filesystem state
+// Stored at 0x4700C000:
+//   [0]  disk_base (address of disk image in memory)
+//   [8]  bytes_per_sector
+//   [16] sectors_per_cluster
+//   [24] reserved_sectors
+//   [32] num_fats
+//   [40] root_entry_count
+//   [48] sectors_per_fat
+//   [56] root_dir_start (byte offset)
+//   [64] data_start (byte offset)
+//   [72] total_sectors
+
+fn fat_init(disk_base: i64) {
+    let state = 0x4700C000
+    volatile_write(state, disk_base)
+    volatile_write(state + 8, read_u16(disk_base + 11))
+    volatile_write(state + 16, volatile_read_u8(disk_base + 13))
+    volatile_write(state + 24, read_u16(disk_base + 14))
+    volatile_write(state + 32, volatile_read_u8(disk_base + 16))
+    volatile_write(state + 40, read_u16(disk_base + 17))
+    volatile_write(state + 48, read_u16(disk_base + 22))
+
+    let bps = volatile_read(state + 8)
+    let reserved = volatile_read(state + 24)
+    let nfats = volatile_read(state + 32)
+    let spf = volatile_read(state + 48)
+    let root_entries = volatile_read(state + 40)
+
+    // Root directory starts after reserved + FAT tables
+    let root_start = (reserved + nfats * spf) * bps
+    volatile_write(state + 56, root_start)
+
+    // Data area starts after root directory
+    let root_size = root_entries * 32
+    let data_start = root_start + root_size
+    volatile_write(state + 64, data_start)
+
+    let total = read_u16(disk_base + 19)
+    if total == 0 {
+        volatile_write(state + 72, read_u32(disk_base + 36))
+    } else {
+        volatile_write(state + 72, total)
+    }
+}
+
+fn fat_disk_base() -> i64 {
+    volatile_read(0x4700C000)
+}
+
+fn fat_root_start() -> i64 {
+    volatile_read(0x4700C038)
+}
+
+fn fat_root_entries() -> i64 {
+    volatile_read(0x4700C028)
+}
+
+fn fat_data_start() -> i64 {
+    volatile_read(0x4700C040)
+}
+
+fn fat_bps() -> i64 {
+    volatile_read(0x4700C008)
+}
+
+fn fat_spc() -> i64 {
+    volatile_read(0x4700C010)
+}
+
+// Get cluster data offset
+fn cluster_offset(cluster: i64) -> i64 {
+    let base = fat_disk_base()
+    let data = fat_data_start()
+    let bps = fat_bps()
+    let spc = fat_spc()
+    base + data + (cluster - 2) * spc * bps
+}

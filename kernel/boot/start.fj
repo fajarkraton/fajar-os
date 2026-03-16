@@ -264,6 +264,12 @@ fn cmd_help() {
     help_line(109, 107, 100, 105, 114, 46)
     // "  cp   ."
     help_line(99, 112, 32, 32, 32, 46)
+    // "  mount "
+    help_line(109, 111, 117, 110, 116, 32)
+    // "  lsfat "
+    help_line(108, 115, 102, 97, 116, 32)
+    // "  catfat"
+    help_line(99, 97, 116, 102, 97, 116)
 }
 
 fn cmd_ps() {
@@ -1726,6 +1732,236 @@ fn fs_free_slot() -> i64 {
     0
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// FAT Filesystem on RAM disk (Milestone 1)
+// Disk loaded at 0x44000000 by QEMU -device loader
+// ═══════════════════════════════════════════════════════════════════
+
+fn fat_read_u16(addr: i64) -> i64 {
+    let lo = volatile_read_u8(addr)
+    let hi = volatile_read_u8(addr + 1)
+    lo + hi * 256
+}
+
+fn fat_read_u32(addr: i64) -> i64 {
+    volatile_read_u8(addr) + volatile_read_u8(addr + 1) * 256 + volatile_read_u8(addr + 2) * 65536 + volatile_read_u8(addr + 3) * 16777216
+}
+
+fn fat_init_disk() {
+    let base = 0x44000000
+    // Check for valid FAT BPB (bytes per sector should be 512)
+    let bps = fat_read_u16(base + 11)
+    if bps == 512 {
+        volatile_write(0x4700C000, base)
+        volatile_write(0x4700C008, bps)
+        volatile_write(0x4700C010, volatile_read_u8(base + 13))
+        let reserved = fat_read_u16(base + 14)
+        volatile_write(0x4700C018, reserved)
+        let nfats = volatile_read_u8(base + 16)
+        volatile_write(0x4700C020, nfats)
+        let root_entries = fat_read_u16(base + 17)
+        volatile_write(0x4700C028, root_entries)
+        let spf = fat_read_u16(base + 22)
+        volatile_write(0x4700C030, spf)
+        let root_start = (reserved + nfats * spf) * bps
+        volatile_write(0x4700C038, root_start)
+        let data_start = root_start + root_entries * 32
+        volatile_write(0x4700C040, data_start)
+        volatile_write(0x4700C048, 1)
+        dmesg_log(70, 65, 84, 32)
+    } else {
+        volatile_write(0x4700C048, 0)
+    }
+}
+
+fn fat_mounted() -> i64 {
+    volatile_read(0x4700C048)
+}
+
+fn cmd_is_mount() -> i64 {
+    let len = cmd_len()
+    if len != 5 { 0 }
+    else { if cmd_char(0) == 109 { if cmd_char(1) == 111 { if cmd_char(4) == 116 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_mount() {
+    fat_init_disk()
+    if fat_mounted() == 1 {
+        let entries = volatile_read(0x4700C028)
+        putc(70) putc(65) putc(84) putc(32)
+        print_num(entries)
+        putc(32)
+        putc(101)
+        putc(110)
+        putc(116)
+        putc(114)
+        putc(105)
+        putc(101)
+        putc(115)
+        nl()
+    } else {
+        putc(78) putc(111) putc(32) putc(100) putc(105) putc(115) putc(107)
+        nl()
+    }
+}
+
+fn cmd_is_lsfat() -> i64 {
+    let len = cmd_len()
+    if len != 5 { 0 }
+    else { if cmd_char(0) == 108 { if cmd_char(1) == 115 { if cmd_char(2) == 102 { if cmd_char(3) == 97 { if cmd_char(4) == 116 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_lsfat() {
+    if fat_mounted() == 0 {
+        putc(78) putc(111) putc(116) putc(32) putc(109) putc(111) putc(117) putc(110) putc(116)
+        nl()
+    } else {
+        let base = volatile_read(0x4700C000)
+        let root = volatile_read(0x4700C038)
+        let entries = volatile_read(0x4700C028)
+        let mut i = 0
+        while i < entries {
+            let entry = base + root + i * 32
+            let first = volatile_read_u8(entry)
+            if first != 0 {
+                if first != 0xE5 {
+                    let attr = volatile_read_u8(entry + 11)
+                    if attr != 0x0F {
+                        // Type
+                        if (attr & 0x10) != 0 {
+                            putc(100)
+                        } else {
+                            putc(45)
+                        }
+                        putc(32)
+                        // Size
+                        let size = fat_read_u32(entry + 28)
+                        print_num(size)
+                        putc(32)
+                        // Name (8.3)
+                        let mut j = 0
+                        while j < 8 {
+                            let c = volatile_read_u8(entry + j)
+                            if c != 32 {
+                                if c >= 65 {
+                                    if c <= 90 {
+                                        putc(c + 32)
+                                    } else {
+                                        putc(c)
+                                    }
+                                } else {
+                                    putc(c)
+                                }
+                            }
+                            j = j + 1
+                        }
+                        // Extension
+                        let ext0 = volatile_read_u8(entry + 8)
+                        if ext0 != 32 {
+                            putc(46)
+                            let mut k = 8
+                            while k < 11 {
+                                let ec = volatile_read_u8(entry + k)
+                                if ec != 32 {
+                                    if ec >= 65 {
+                                        if ec <= 90 {
+                                            putc(ec + 32)
+                                        } else {
+                                            putc(ec)
+                                        }
+                                    } else {
+                                        putc(ec)
+                                    }
+                                }
+                                k = k + 1
+                            }
+                        }
+                        nl()
+                    }
+                }
+            }
+            i = i + 1
+        }
+    }
+}
+
+fn cmd_is_catfat() -> i64 {
+    let len = cmd_len()
+    if len < 8 { 0 }
+    else { if cmd_char(0) == 99 { if cmd_char(1) == 97 { if cmd_char(2) == 116 { if cmd_char(3) == 102 { if cmd_char(4) == 97 { if cmd_char(5) == 116 { if cmd_char(6) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_catfat() {
+    if fat_mounted() == 0 {
+        putc(78) putc(111) putc(116) putc(32) putc(109) putc(111) putc(117) putc(110) putc(116)
+        nl()
+    } else {
+        let base = volatile_read(0x4700C000)
+        let root = volatile_read(0x4700C038)
+        let entries = volatile_read(0x4700C028)
+        let data_start = volatile_read(0x4700C040)
+        let bps = volatile_read(0x4700C008)
+        let spc = volatile_read(0x4700C010)
+        // Match filename from command (convert to uppercase 8.3)
+        let mut found = 0
+        let mut i = 0
+        while i < entries {
+            let entry = base + root + i * 32
+            let first = volatile_read_u8(entry)
+            if first != 0 {
+                if first != 0xE5 {
+                    let attr = volatile_read_u8(entry + 11)
+                    if (attr & 0x10) == 0 {
+                        if attr != 0x0F {
+                            // Simple match: compare first chars
+                            let len = cmd_len()
+                            let mut match_ok = 1
+                            let mut ci = 7
+                            let mut fi = 0
+                            while ci < len {
+                                let cc = cmd_char(ci)
+                                let mut uc = cc
+                                if cc >= 97 {
+                                    if cc <= 122 {
+                                        uc = cc - 32
+                                    }
+                                }
+                                if cc == 46 {
+                                    // Skip to extension (pos 8)
+                                    fi = 8
+                                } else {
+                                    let fc = volatile_read_u8(entry + fi)
+                                    if fc != uc {
+                                        match_ok = 0
+                                        ci = len
+                                    }
+                                    fi = fi + 1
+                                }
+                                ci = ci + 1
+                            }
+                            if match_ok == 1 {
+                                found = 1
+                                let size = fat_read_u32(entry + 28)
+                                let cluster = fat_read_u16(entry + 26)
+                                let offset = base + data_start + (cluster - 2) * spc * bps
+                                let mut k = 0
+                                while k < size {
+                                    putc(volatile_read_u8(offset + k))
+                                    k = k + 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            i = i + 1
+        }
+        if found == 0 {
+            putc(63) nl()
+        }
+    }
+}
+
 fn cmd_is_ls() -> i64 {
     let len = cmd_len()
     if len != 2 { 0 }
@@ -2469,6 +2705,18 @@ fn execute_cmd() {
         }
         if cmd_is_cp() == 1 {
             cmd_cp()
+            handled = 1
+        }
+        if cmd_is_mount() == 1 {
+            cmd_mount()
+            handled = 1
+        }
+        if cmd_is_lsfat() == 1 {
+            cmd_lsfat()
+            handled = 1
+        }
+        if cmd_is_catfat() == 1 {
+            cmd_catfat()
             handled = 1
         }
         if handled == 0 {
