@@ -1,7 +1,7 @@
-// FajarOS v3.0 "Surya" — Kernel Entry + MMU
+// FajarOS v3.0 "Surya" — Kernel (asm! bug #1 fixed)
 //
 // Build: fj build kernel/boot/start.fj --target aarch64-unknown-none --no-std -o fajaros.elf
-// Run:   qemu-system-aarch64 -M virt -cpu cortex-a76 -m 256M -kernel fajaros.elf -nographic
+// Run:   qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a76 -m 512M -kernel fajaros.elf -nographic
 
 @panic_handler
 fn panic(code: i64) -> i64 { code }
@@ -10,393 +10,109 @@ fn putc(c: i64) {
     volatile_write(0x09000000, c)
 }
 
-fn newline() {
+fn nl() {
     putc(10)
 }
 
-fn print_ok() {
-    putc(79)
-    putc(75)
-    newline()
-}
-
-fn print_banner() {
-    putc(70)
-    putc(97)
-    putc(106)
-    putc(97)
-    putc(114)
-    putc(79)
-    putc(83)
-    putc(32)
-    putc(118)
-    putc(51)
-    putc(46)
-    putc(48)
-    putc(32)
-    putc(83)
-    putc(117)
-    putc(114)
-    putc(121)
-    putc(97)
-    newline()
-}
-
-fn print_label(a: i64, b: i64, c: i64) {
-    putc(a)
-    putc(b)
-    putc(c)
-    putc(58)
-    putc(32)
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// MMU — simplified for 4-param limit in bare-metal AOT
-// ═══════════════════════════════════════════════════════════════════
-
-// Page table allocator: use fixed addresses
-// Page 0 = L0, pages 1-16 = L1/L2/L3 tables
-fn pt_zero(addr: i64) {
-    let mut i = 0
-    while i < 4096 {
-        let a = addr + i
-        volatile_write(a, 0)
-        i = i + 8
-    }
-}
-
-fn pt_index(vaddr: i64, level: i64) -> i64 {
-    let diff = 3 - level
-    let shift = 12 + diff * 9
-    let shifted = vaddr >> shift
-    shifted & 511
-}
-
-// Use 2MB block mappings (L2 level) instead of 4KB pages
-// This avoids deep page table walks and simplifies code
-// L0[47:39] → L1[38:30] → L2[29:21] → 2MB block
-fn map_2mb_block(l0: i64, vaddr: i64, paddr: i64, flags: i64) {
-    // Ensure L1 table exists
-    let l0i = pt_index(vaddr, 0)
-    let l0_a = l0 + l0i * 8
-    let l0e = volatile_read(l0_a)
-    let mut l1 = 0
-    if (l0e & 1) == 0 {
-        // Allocate L1 at next 4KB-aligned address after L0
-        l1 = l0 + 4096 + l0i * 4096
-        pt_zero(l1)
-        volatile_write(l0_a, l1 | 3)
-    } else {
-        l1 = l0e & 0xFFFFFFFFF000
-    }
-
-    // Ensure L2 table exists
-    let l1i = pt_index(vaddr, 1)
-    let l1_a = l1 + l1i * 8
-    let l1e = volatile_read(l1_a)
-    let mut l2 = 0
-    if (l1e & 1) == 0 {
-        l2 = l1 + 4096 + l1i * 4096
-        pt_zero(l2)
-        volatile_write(l1_a, l2 | 3)
-    } else {
-        l2 = l1e & 0xFFFFFFFFF000
-    }
-
-    // L2 block entry (2MB): bit 0 = valid, bit 1 = 0 (block, not table)
-    let l2i = pt_index(vaddr, 2)
-    let l2_a = l2 + l2i * 8
-    let entry = (paddr & 0xFFFFFFE00000) | flags | 1
-    volatile_write(l2_a, entry)
-}
-
-fn map_range_2mb(l0: i64, base: i64, size: i64, flags: i64) {
-    let mut off = 0
-    while off < size {
-        let addr = base + off
-        map_2mb_block(l0, addr, addr, flags)
-        off = off + 0x200000
-    }
-}
-
-fn init_mmu() -> i64 {
-    // MAIR_EL1: idx0=Device(0x00), idx1=Normal-WB(0xFF)
-    asm!("msr MAIR_EL1, x0", in("x0") 0xFF00)
-
-    // TCR_EL1: T0SZ=16, 4KB granule, inner shareable, WB caches
-    asm!("msr TCR_EL1, x0", in("x0") 0x0000000000803510)
-    asm!("isb")
-
-    // L0 page table
-    let l0 = 0x46000000
-    pt_zero(l0)
-
-    // Map MMIO 0x00000000-0x10000000 (256MB, device memory)
-    // flags: AF=1024, valid=1 → 1025 (device-nGnRnE, AttrIndx=0)
-    map_range_2mb(l0, 0x00000000, 0x10000000, 1025)
-
-    // Map kernel 0x40000000-0x50000000 (256MB, normal memory)
-    // flags: AF=1024, SH=768, AttrIndx=1(4), valid=1 → 1797
-    map_range_2mb(l0, 0x40000000, 0x10000000, 1029)
-
-    // Set TTBR0_EL1
-    asm!("msr TTBR0_EL1, x0", in("x0") l0)
-    asm!("isb")
-
-    // Enable MMU
-    let mut sctlr = 0
-    asm!("mrs x0, SCTLR_EL1", out("x0") sctlr)
-    sctlr = sctlr | 1 | 4 | 4096
-    asm!("msr SCTLR_EL1, x0", in("x0") sctlr)
-    asm!("isb")
-
-    l0
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Exception Handlers (called from assembly vector stubs)
-// ═══════════════════════════════════════════════════════════════════
-
-// Sync exception handler: dispatches SVC, data abort, etc.
-// Called with: x0=ESR_EL1, x1=ELR_EL1, x2=FAR_EL1
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
-    // Extract EC (Exception Class) from ESR bits [31:26]
     let ec = (esr >> 26) & 63
-
     if ec == 21 {
-        // EC=0x15: SVC instruction (syscall)
-        // "SVC"
         putc(83)
         putc(86)
         putc(67)
-        newline()
-    } else {
-        if ec == 36 {
-            // EC=0x24: Data abort from lower EL
-            putc(68)
-            putc(65)
-            putc(66)
-            putc(84)
-            newline()
-        } else {
-            if ec == 37 {
-                // EC=0x25: Data abort from current EL
-                putc(68)
-                putc(65)
-                putc(66)
-                putc(84)
-                newline()
-            } else {
-                // Unknown exception
-                putc(69)
-                putc(88)
-                putc(67)
-                newline()
-            }
-        }
+        nl()
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// GICv3 (QEMU -M virt: GICD=0x08000000, GICR=0x080A0000)
-// ═══════════════════════════════════════════════════════════════════
-
-fn gic_dist_init() {
-    // Disable distributor
-    volatile_write_u32(0x08000000, 0)
-    // Clear + disable all SPIs
-    let mut i = 1
-    while i < 32 {
-        volatile_write_u32(0x08000180 + i * 4, 0xFFFFFFFF)
-        volatile_write_u32(0x08000280 + i * 4, 0xFFFFFFFF)
-        volatile_write_u32(0x08000080 + i * 4, 0xFFFFFFFF)
-        i = i + 1
+fn fj_exception_irq() {
+    let mut irq = 0
+    asm!("mrs x0, ICC_IAR1_EL1", out("x0") irq)
+    if irq == 30 {
+        let ticks = volatile_read(0x47001008) + 1
+        volatile_write(0x47001008, ticks)
+        let mut freq = 0
+        asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
+        asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 100)
+        asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
     }
-    // Enable distributor group 1
-    volatile_write_u32(0x08000000, 2)
-}
-
-fn gic_redist_init() {
-    // Wake redistributor
-    let waker = volatile_read_u32(0x080A0014)
-    volatile_write_u32(0x080A0014, waker & 0xFFFFFFFD)
-    // Wait for wake
-    let mut n = 0
-    while n < 1000 {
-        let w = volatile_read_u32(0x080A0014)
-        if ((w >> 2) & 1) == 0 {
-            n = 1000
-        }
-        n = n + 1
-    }
-    // All SGI/PPI to group 1, disabled, clear pending
-    volatile_write_u32(0x080B0080, 0xFFFFFFFF)
-    volatile_write_u32(0x080B0180, 0xFFFFFFFF)
-    volatile_write_u32(0x080B0280, 0xFFFFFFFF)
-}
-
-fn gic_cpu_init() {
-    asm!("msr ICC_PMR_EL1, x0", in("x0") 0xFF)
-    asm!("msr ICC_IGRPEN1_EL1, x0", in("x0") 1)
-    // Enable IRQs (DAIFClr #2 via assembly function)
-    irq_enable()
-}
-
-fn gic_init() {
-    gic_dist_init()
-    gic_redist_init()
-    gic_cpu_init()
-}
-
-fn gic_enable_ppi(irq: i64) {
-    let bit = 1 << irq
-    volatile_write_u32(0x080B0100, bit)
-}
-
-fn gic_ack() -> i64 {
-    let mut iar = 0
-    asm!("mrs x0, ICC_IAR1_EL1", out("x0") iar)
-    iar & 0xFFFFFF
-}
-
-fn gic_eoi(irq: i64) {
     asm!("msr ICC_EOIR1_EL1, x0", in("x0") irq)
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Timer (aarch64 generic timer, PPI 30)
-// ═══════════════════════════════════════════════════════════════════
-
-fn timer_init(interval: i64) {
-    // Set timer value
-    asm!("msr CNTP_TVAL_EL0, x0", in("x0") interval)
-    // Enable timer: CNTP_CTL_EL0 bit 0 = enable
-    asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
+fn init_gic() {
+    volatile_write_u32(0x08000000, 0)
+    volatile_write_u32(0x08000000, 2)
+    let waker = volatile_read_u32(0x080A0014)
+    volatile_write_u32(0x080A0014, waker & 0xFFFFFFFD)
+    volatile_write_u32(0x080B0080, 0xFFFFFFFF)
+    volatile_write_u32(0x080B0180, 0xFFFFFFFF)
+    volatile_write_u32(0x080B0100, 1 << 30)
+    asm!("msr ICC_PMR_EL1, x0", in("x0") 0xFF)
+    asm!("msr ICC_IGRPEN1_EL1, x0", in("x0") 1)
+    irq_enable()
 }
-
-fn timer_disable() {
-    asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
-}
-
-// Timer tick counter
-const TICK_ADDR: i64 = 0x47001008
-
-fn tick_count() -> i64 {
-    volatile_read(TICK_ADDR)
-}
-
-// IRQ handler — GIC + scheduler
-fn fj_exception_irq() {
-    let irq = gic_ack()
-    if irq == 30 {
-        // Timer tick
-        let ticks = volatile_read(TICK_ADDR) + 1
-        volatile_write(TICK_ADDR, ticks)
-        // Re-arm timer (10ms quantum at ~62MHz QEMU timer)
-        asm!("msr CNTP_TVAL_EL0, x0", in("x0") 620000)
-    }
-    gic_eoi(irq)
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Scheduler — Process table in kernel memory
-// ═══════════════════════════════════════════════════════════════════
-
-const PROC_TABLE: i64 = 0x47000000
-const MAX_PROCS: i64 = 16
-const CUR_PID_ADDR: i64 = 0x47001000
-
-fn proc_addr(pid: i64) -> i64 {
-    PROC_TABLE + pid * 256
-}
-
-fn proc_state(pid: i64) -> i64 {
-    volatile_read(proc_addr(pid) + 8)
-}
-
-fn sched_init() {
-    let mut i = 0
-    while i < 16 {
-        let a = proc_addr(i)
-        volatile_write(a, i)
-        volatile_write(a + 8, 0)
-        i = i + 1
-    }
-    // PID 0 = kernel
-    volatile_write(proc_addr(0) + 8, 2)
-    volatile_write(CUR_PID_ADDR, 0)
-    volatile_write(TICK_ADDR, 0)
-}
-
-fn proc_create(pid: i64, entry: i64) {
-    let a = proc_addr(pid)
-    volatile_write(a, pid)
-    volatile_write(a + 8, 1)
-    volatile_write(a + 24, entry)
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Kernel Main
-// ═══════════════════════════════════════════════════════════════════
 
 fn kernel_main() -> i64 {
-    print_banner()
+    // Banner: FjOS
+    putc(70)
+    putc(106)
+    putc(79)
+    putc(83)
+    nl()
 
-    print_label(67, 80, 85)
-    print_ok()
+    // CPU: read EL
+    putc(69)
+    putc(76)
+    let mut el = 0
+    asm!("mrs x0, CurrentEL", out("x0") el)
+    putc(48 + ((el >> 2) & 3))
+    nl()
 
-    print_label(77, 69, 77)
-    print_ok()
+    // GIC init
+    putc(71)
+    putc(73)
+    putc(67)
+    putc(32)
+    init_gic()
+    putc(79)
+    putc(75)
+    nl()
 
-    print_label(77, 77, 85)
-    let mmu_r = init_mmu()
-    print_ok()
-
-    print_label(69, 88, 67)
-    asm!("svc #0")
-    print_ok()
-
-    // GIC
-    print_label(71, 73, 67)
-    gic_init()
-    print_ok()
-
-    // Scheduler
-    print_label(83, 67, 72)
-    sched_init()
-    print_ok()
-
-    // Timer: enable PPI 30 for preemptive scheduling
-    print_label(84, 77, 82)
-    gic_enable_ppi(30)
-    // Read timer freq
+    // Timer: set 10ms tick, wait, count ticks
+    putc(84)
+    putc(77)
+    putc(82)
+    putc(32)
+    volatile_write(0x47001008, 0)
     let mut freq = 0
     asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
-    // Timer interval: freq/100 = 10ms tick
-    let interval = freq / 100
-    timer_init(interval)
-    // Busy-wait
-    let mut wait = 0
-    while wait < 2000000 {
-        wait = wait + 1
+    asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 100)
+    asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
+
+    // Wait ~0.5s
+    let mut w = 0
+    while w < 5000000 {
+        w = w + 1
     }
-    timer_disable()
-    let ticks = tick_count()
+
+    // Stop timer
+    asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
+
+    // Print tick count
+    let ticks = volatile_read(0x47001008)
     if ticks > 9 {
         putc(43)
     } else {
         putc(48 + ticks)
     }
-    newline()
+    putc(116)
+    nl()
 
-    // BOOT OK
+    // BOOT
     putc(66)
     putc(79)
     putc(79)
     putc(84)
-    putc(32)
-    print_ok()
-
+    nl()
     0
 }
 
