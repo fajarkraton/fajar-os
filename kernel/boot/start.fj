@@ -228,6 +228,18 @@ fn cmd_help() {
     help_line(114, 97, 110, 100, 32, 32)
     // "  loops."
     help_line(108, 111, 111, 112, 115, 46)
+    // "  ascii "
+    help_line(97, 115, 99, 105, 105, 32)
+    // "  bits ."
+    help_line(98, 105, 116, 115, 32, 46)
+    // "  prime."
+    help_line(112, 114, 105, 109, 101, 46)
+    // "  swap ."
+    help_line(115, 119, 97, 112, 32, 46)
+    // "  wc    "
+    help_line(119, 99, 32, 32, 32, 32)
+    // "  head ."
+    help_line(104, 101, 97, 100, 32, 46)
 }
 
 fn cmd_ps() {
@@ -1306,6 +1318,159 @@ fn cmd_loops() {
     nl()
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Sprint 36.extra batch 3: ascii, bits, prime, swap, wc, head
+// ═══════════════════════════════════════════════════════════════════
+
+fn cmd_is_ascii() -> i64 {
+    let len = cmd_len()
+    if len != 5 { 0 }
+    else { if cmd_char(0) == 97 { if cmd_char(1) == 115 { if cmd_char(4) == 105 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_ascii() {
+    // Print ASCII table 32-126
+    let mut i = 32
+    while i < 127 {
+        print_num(i)
+        putc(58)
+        putc(i)
+        putc(32)
+        if ((i - 31) & 7) == 0 {
+            nl()
+        }
+        i = i + 1
+    }
+    nl()
+}
+
+fn cmd_is_bits() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 98 { if cmd_char(1) == 105 { if cmd_char(2) == 116 { if cmd_char(3) == 115 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_bits() {
+    // "bits <num>" — show binary representation (16 bits)
+    let val = parse_num_from(5)
+    let mut bit = 15
+    while bit >= 0 {
+        let b = (val >> bit) & 1
+        putc(48 + b)
+        if (bit & 3) == 0 {
+            if bit > 0 {
+                putc(95)
+            }
+        }
+        bit = bit - 1
+    }
+    putc(32)
+    putc(40)
+    print_num(val)
+    putc(41)
+    nl()
+}
+
+fn cmd_is_prime() -> i64 {
+    let len = cmd_len()
+    if len < 7 { 0 }
+    else { if cmd_char(0) == 112 { if cmd_char(1) == 114 { if cmd_char(2) == 105 { if cmd_char(3) == 109 { if cmd_char(4) == 101 { if cmd_char(5) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_prime() {
+    let n = parse_num_from(6)
+    if n < 2 {
+        putc(78)
+        putc(79)
+        nl()
+    } else {
+        let mut is_p = 1
+        let mut d = 2
+        while d * d <= n {
+            if (n / d) * d == n {
+                is_p = 0
+                d = n
+            }
+            d = d + 1
+        }
+        if is_p == 1 {
+            putc(89)
+            putc(69)
+            putc(83)
+        } else {
+            putc(78)
+            putc(79)
+        }
+        nl()
+    }
+}
+
+fn cmd_is_swap() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 115 { if cmd_char(1) == 119 { if cmd_char(2) == 97 { if cmd_char(3) == 112 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_swap() {
+    // "swap <addr>" — swap 8 bytes at addr with addr+8
+    let addr = parse_num_from(5)
+    let a = volatile_read(addr)
+    let b = volatile_read(addr + 8)
+    volatile_write(addr, b)
+    volatile_write(addr + 8, a)
+    putc(79)
+    putc(75)
+    nl()
+}
+
+fn cmd_is_wc() -> i64 {
+    let len = cmd_len()
+    if len != 2 { 0 }
+    else { if cmd_char(0) == 119 { if cmd_char(1) == 99 { 1 } else { 0 } } else { 0 } }
+}
+
+fn cmd_wc() {
+    // Count total commands in history
+    let count = volatile_read(0x47004800)
+    print_num(count)
+    putc(32)
+    putc(99)
+    putc(109)
+    putc(100)
+    putc(115)
+    nl()
+}
+
+fn cmd_is_head() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 104 { if cmd_char(1) == 101 { if cmd_char(2) == 97 { if cmd_char(3) == 100 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_head() {
+    // "head <addr>" — show first 8 bytes as text
+    let addr = parse_num_from(5)
+    let mut i = 0
+    while i < 8 {
+        let b = volatile_read_u8(addr + i)
+        if b >= 32 {
+            if b < 127 {
+                putc(b)
+            } else {
+                putc(46)
+            }
+        } else {
+            if b == 0 {
+                i = 8
+            } else {
+                putc(46)
+            }
+        }
+        i = i + 1
+    }
+    nl()
+}
+
 fn cmd_is_reboot() -> i64 {
     let len = cmd_len()
     if len != 6 { 0 }
@@ -1638,6 +1803,30 @@ fn execute_cmd() {
         }
         if cmd_is_loops() == 1 {
             cmd_loops()
+            handled = 1
+        }
+        if cmd_is_ascii() == 1 {
+            cmd_ascii()
+            handled = 1
+        }
+        if cmd_is_bits() == 1 {
+            cmd_bits()
+            handled = 1
+        }
+        if cmd_is_prime() == 1 {
+            cmd_prime()
+            handled = 1
+        }
+        if cmd_is_swap() == 1 {
+            cmd_swap()
+            handled = 1
+        }
+        if cmd_is_wc() == 1 {
+            cmd_wc()
+            handled = 1
+        }
+        if cmd_is_head() == 1 {
+            cmd_head()
             handled = 1
         }
         if handled == 0 {
