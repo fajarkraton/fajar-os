@@ -220,15 +220,15 @@ Number  Name                    Context    Description
 
 | # | Task | Status |
 |---|------|--------|
-| 1.1 | Add `BareMetalAarch64` variant to `BspArch` enum | [ ] |
-| 1.2 | Register `aarch64-unknown-none` target triple in Cranelift codegen | [ ] |
-| 1.3 | Create `TargetConfig` struct: no-std, no-libc, static linking | [ ] |
-| 1.4 | Modify `ObjectCompiler` to emit bare-metal ELF (no dynamic linking) | [ ] |
-| 1.5 | Disable libc-dependent runtime functions when target is bare-metal | [ ] |
-| 1.6 | Add `--target aarch64-none` CLI flag to `fj build` | [ ] |
-| 1.7 | Generate minimal `.text` + `.data` + `.bss` sections | [ ] |
-| 1.8 | Test: compile empty `@kernel fn _start() {}` → valid aarch64 ELF | [ ] |
-| 1.9 | Test: QEMU `-M virt -cpu cortex-a76 -kernel fajaros.elf` boots | [ ] |
+| 1.1 | Add `BareMetalAarch64` variant to `BspArch` enum | [x] |
+| 1.2 | Register `aarch64-unknown-none` target triple in Cranelift codegen (already existed) | [x] |
+| 1.3 | Create `TargetConfig` struct: no-std, no-libc, static linking (already existed) | [x] |
+| 1.4 | Modify `ObjectCompiler`: bare-metal ELF with `declare_bare_metal_runtime()` | [x] |
+| 1.5 | Disable libc-dependent runtime: `no_std` → only fj_rt_bare_* (memcpy/memset/print/halt) | [x] |
+| 1.6 | `--target aarch64-none --no-std` CLI flag (already worked) | [x] |
+| 1.7 | Generate minimal `.text` + `.data` + `.bss` sections (linker.rs already handled) | [x] |
+| 1.8 | Test: 6 bare-metal tests pass (empty kernel, no libc symbols, bare runtime) | [x] |
+| 1.9 | Test: QEMU boots without crash (no output yet — UART is Sprint 2) | [x] |
 | 1.10 | Document bare-metal target in `docs/BARE_METAL.md` | [ ] |
 
 ### Sprint 2: No-Std Runtime
