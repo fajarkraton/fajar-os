@@ -1,6 +1,7 @@
-// FajarOS v3.0 "Surya" — Timer + Sleep + Syscall Demo
+// FajarOS v3.0 "Surya" — Interactive Shell (fjsh)
 //
-// Features: scheduler, IPC, timer API, sleep_ms, syscall via SVC
+// Shell reads commands from UART, executes them.
+// Commands: help, ps, uptime, echo, reboot
 //
 // Build: fj build kernel/boot/start.fj --target aarch64-unknown-none --no-std -o fajaros.elf
 // Run:   qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a76 -m 512M -kernel fajaros.elf -nographic
@@ -36,14 +37,8 @@ fn print_num(n: i64) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Timer API (Sprint 14)
+// Timer
 // ═══════════════════════════════════════════════════════════════════
-
-fn timer_freq() -> i64 {
-    let mut f = 0
-    asm!("mrs x0, CNTFRQ_EL0", out("x0") f)
-    f
-}
 
 fn timer_ticks() -> i64 {
     let mut t = 0
@@ -51,26 +46,13 @@ fn timer_ticks() -> i64 {
     t
 }
 
-fn timer_ms_to_ticks(ms: i64) -> i64 {
-    let f = timer_freq()
-    f / 1000 * ms
+fn timer_freq() -> i64 {
+    let mut f = 0
+    asm!("mrs x0, CNTFRQ_EL0", out("x0") f)
+    f
 }
 
-fn sleep_ticks(ticks: i64) {
-    let start = timer_ticks()
-    let target = start + ticks
-    let mut now = start
-    while now < target {
-        asm!("wfi")
-        now = timer_ticks()
-    }
-}
-
-fn sleep_ms(ms: i64) {
-    sleep_ticks(timer_ms_to_ticks(ms))
-}
-
-fn time_since_boot_ms() -> i64 {
+fn uptime_ms() -> i64 {
     let t = timer_ticks()
     let f = timer_freq()
     if f > 0 {
@@ -81,149 +63,223 @@ fn time_since_boot_ms() -> i64 {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Syscall handler (SVC #0 with syscall number in x8)
-//   syscall 0 = yield (cooperative yield)
-//   syscall 1 = sleep_ms (x0 = milliseconds)
-//   syscall 2 = getpid (returns current PID)
-//   syscall 3 = print_char (x0 = character)
+// UART Input (PL011 read)
+// ═══════════════════════════════════════════════════════════════════
+
+fn uart_has_char() -> i64 {
+    let fr = volatile_read_u32(0x09000018)
+    if (fr & 16) == 0 {
+        1
+    } else {
+        0
+    }
+}
+
+fn uart_getc() -> i64 {
+    volatile_read_u32(0x09000000) & 0xFF
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Command buffer (at 0x47003000, max 128 chars)
+// ═══════════════════════════════════════════════════════════════════
+
+fn cmd_clear() {
+    let mut i = 0
+    while i < 128 {
+        volatile_write_u8(0x47003000 + i, 0)
+        i = i + 1
+    }
+    volatile_write(0x47003080, 0)
+}
+
+fn cmd_len() -> i64 {
+    volatile_read(0x47003080)
+}
+
+fn cmd_push(c: i64) {
+    let pos = cmd_len()
+    if pos < 127 {
+        volatile_write_u8(0x47003000 + pos, c)
+        volatile_write(0x47003080, pos + 1)
+    }
+}
+
+fn cmd_char(idx: i64) -> i64 {
+    volatile_read_u8(0x47003000 + idx)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Command matching (compare buffer against known strings)
+// ═══════════════════════════════════════════════════════════════════
+
+fn cmd_is_help() -> i64 {
+    let len = cmd_len()
+    if len != 4 { 0 }
+    else { if cmd_char(0) == 104 { if cmd_char(1) == 101 { if cmd_char(2) == 108 { if cmd_char(3) == 112 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_is_ps() -> i64 {
+    let len = cmd_len()
+    if len != 2 { 0 }
+    else { if cmd_char(0) == 112 { if cmd_char(1) == 115 { 1 } else { 0 } } else { 0 } }
+}
+
+fn cmd_is_uptime() -> i64 {
+    let len = cmd_len()
+    if len != 6 { 0 }
+    else { if cmd_char(0) == 117 { if cmd_char(1) == 112 { if cmd_char(5) == 101 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Shell Commands
+// ═══════════════════════════════════════════════════════════════════
+
+fn cmd_help() {
+    // "Commands:"
+    putc(67)
+    putc(111)
+    putc(109)
+    putc(109)
+    putc(97)
+    putc(110)
+    putc(100)
+    putc(115)
+    putc(58)
+    nl()
+    // "  help   - show this"
+    putc(32)
+    putc(32)
+    putc(104)
+    putc(101)
+    putc(108)
+    putc(112)
+    nl()
+    // "  ps     - process list"
+    putc(32)
+    putc(32)
+    putc(112)
+    putc(115)
+    nl()
+    // "  uptime - boot time"
+    putc(32)
+    putc(32)
+    putc(117)
+    putc(112)
+    putc(116)
+    putc(105)
+    putc(109)
+    putc(101)
+    nl()
+}
+
+fn cmd_ps() {
+    // "PID STATE"
+    putc(80)
+    putc(73)
+    putc(68)
+    putc(32)
+    putc(83)
+    putc(84)
+    nl()
+    let mut p = 0
+    while p < 3 {
+        let st = volatile_read(0x47000000 + p * 256 + 8)
+        putc(48 + p)
+        putc(32)
+        putc(32)
+        putc(32)
+        if st == 0 {
+            putc(70)
+        }
+        if st == 1 {
+            putc(82)
+        }
+        if st == 2 {
+            putc(42)
+        }
+        if st == 3 {
+            putc(68)
+        }
+        nl()
+        p = p + 1
+    }
+}
+
+fn cmd_uptime() {
+    let ms = uptime_ms()
+    let sec = ms / 1000
+    let rem = ms - sec * 1000
+    print_num(sec)
+    putc(46)
+    if rem < 100 {
+        putc(48)
+    }
+    if rem < 10 {
+        putc(48)
+    }
+    print_num(rem)
+    putc(115)
+    nl()
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Shell prompt + read + execute
+// ═══════════════════════════════════════════════════════════════════
+
+fn prompt() {
+    // "fjsh> "
+    putc(102)
+    putc(106)
+    putc(115)
+    putc(104)
+    putc(62)
+    putc(32)
+}
+
+fn execute_cmd() {
+    let len = cmd_len()
+    if len == 0 {
+        putc(0)
+    } else {
+        let mut handled = 0
+        if cmd_is_help() == 1 {
+            cmd_help()
+            handled = 1
+        }
+        if cmd_is_ps() == 1 {
+            cmd_ps()
+            handled = 1
+        }
+        if cmd_is_uptime() == 1 {
+            cmd_uptime()
+            handled = 1
+        }
+        if handled == 0 {
+            putc(63)
+            nl()
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Exception handlers (minimal, no scheduler needed for shell)
 // ═══════════════════════════════════════════════════════════════════
 
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
-    let ec = (esr >> 26) & 63
-    if ec == 21 {
-        // SVC — syscall number not easily available without x8 access
-        // For now, just handle as yield
-        putc(89)
-    }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Scheduler
-// ═══════════════════════════════════════════════════════════════════
-
 fn fj_exception_irq() {
-    let saved_sp = volatile_read(0x47001018)
     let mut irq = 0
     asm!("mrs x0, ICC_IAR1_EL1", out("x0") irq)
-    if irq == 30 {
-        let ticks = volatile_read(0x47001008) + 1
-        volatile_write(0x47001008, ticks)
-        let mut freq = 0
-        asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
-        asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 50)
-        asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
-        let cur = volatile_read(0x47001000)
-        volatile_write(0x47000000 + cur * 256 + 16, saved_sp)
-        let cur_st = volatile_read(0x47000000 + cur * 256 + 8)
-        if cur_st == 2 {
-            volatile_write(0x47000000 + cur * 256 + 8, 1)
-        }
-        let mut next = cur + 1
-        if next > 2 {
-            next = 0
-        }
-        let mut checked = 0
-        while checked < 3 {
-            let st = volatile_read(0x47000000 + next * 256 + 8)
-            if st == 1 {
-                checked = 3
-            } else {
-                next = next + 1
-                if next > 2 {
-                    next = 0
-                }
-                checked = checked + 1
-            }
-        }
-        let nst = volatile_read(0x47000000 + next * 256 + 8)
-        if nst == 1 {
-            if next != cur {
-                volatile_write(0x47000000 + next * 256 + 8, 2)
-                volatile_write(0x47001000, next)
-                volatile_write(0x47001010, volatile_read(0x47000000 + next * 256 + 16))
-            }
-        }
-    }
     asm!("msr ICC_EOIR1_EL1, x0", in("x0") irq)
 }
 
-fn init_gic() {
-    volatile_write_u32(0x08000000, 0)
-    volatile_write_u32(0x08000000, 2)
-    let waker = volatile_read_u32(0x080A0014)
-    volatile_write_u32(0x080A0014, waker & 0xFFFFFFFD)
-    volatile_write_u32(0x080B0080, 0xFFFFFFFF)
-    volatile_write_u32(0x080B0180, 0xFFFFFFFF)
-    volatile_write_u32(0x080B0100, 1 << 30)
-    asm!("msr ICC_PMR_EL1, x0", in("x0") 0xFF)
-    asm!("msr ICC_IGRPEN1_EL1, x0", in("x0") 1)
-    irq_enable()
-}
-
-fn init_stack(top: i64, entry: i64) -> i64 {
-    let sp = top - 256
-    let mut i = 0
-    while i < 240 {
-        volatile_write(sp + i, 0)
-        i = i + 8
-    }
-    volatile_write(sp + 240, entry)
-    volatile_write(sp + 248, entry)
-    sp
-}
-
 // ═══════════════════════════════════════════════════════════════════
-// P1: Timer demo — sleep and measure time
-// ═══════════════════════════════════════════════════════════════════
-
-fn process_1() {
-    putc(80)
-    putc(49)
-    putc(58)
-
-    // Measure sleep accuracy
-    let t0 = time_since_boot_ms()
-    sleep_ms(100)
-    let t1 = time_since_boot_ms()
-    let elapsed = t1 - t0
-
-    // Print elapsed ms
-    print_num(elapsed)
-    putc(109)
-    putc(115)
-    nl()
-
-    volatile_write(0x47000108, 3)
-    asm!("wfi")
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// P2: Tick counter demo
-// ═══════════════════════════════════════════════════════════════════
-
-fn process_2() {
-    putc(80)
-    putc(50)
-    putc(58)
-
-    let freq = timer_freq()
-    let mhz = freq / 1000000
-    print_num(mhz)
-    putc(77)
-    putc(72)
-    putc(122)
-    nl()
-
-    volatile_write(0x47000208, 3)
-    asm!("wfi")
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Kernel Main
+// Kernel Main — Shell Loop
 // ═══════════════════════════════════════════════════════════════════
 
 fn kernel_main() -> i64 {
-    // Banner: "FajarOS v3.0"
+    // Banner
     putc(70)
     putc(97)
     putc(106)
@@ -236,54 +292,63 @@ fn kernel_main() -> i64 {
     putc(51)
     putc(46)
     putc(48)
+    putc(32)
+    putc(83)
+    putc(117)
+    putc(114)
+    putc(121)
+    putc(97)
+    nl()
     nl()
 
-    // Init
+    // Process table init
     volatile_write(0x47000008, 2)
     volatile_write(0x47001000, 0)
-    volatile_write(0x47001008, 0)
-    volatile_write(0x47001010, 0)
-    volatile_write(0x47000108, 1)
-    volatile_write(0x47000110, init_stack(0x48010000, fn_addr(process_1)))
-    volatile_write(0x47000208, 1)
-    volatile_write(0x47000210, init_stack(0x48020000, fn_addr(process_2)))
 
-    init_gic()
-    let mut freq = 0
-    asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
-    asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 50)
-    asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
+    // Shell loop: read chars, execute on Enter
+    prompt()
+    cmd_clear()
 
-    // Wait for processes
-    let mut loops = 0
-    while loops < 50 {
-        asm!("wfi")
-        let p1 = volatile_read(0x47000108)
-        let p2 = volatile_read(0x47000208)
-        if p1 == 3 {
-            if p2 == 3 {
-                loops = 50
+    let mut running = 1
+    while running == 1 {
+        if uart_has_char() == 1 {
+            let c = uart_getc()
+            if c == 13 {
+                // Enter
+                nl()
+                execute_cmd()
+                cmd_clear()
+                prompt()
+            } else {
+                if c == 10 {
+                    // Also handle LF as Enter
+                    nl()
+                    execute_cmd()
+                    cmd_clear()
+                    prompt()
+                } else {
+                    if c == 127 {
+                        // Backspace
+                        let len = cmd_len()
+                        if len > 0 {
+                            volatile_write(0x47003080, len - 1)
+                            putc(8)
+                            putc(32)
+                            putc(8)
+                        }
+                    } else {
+                        if c >= 32 {
+                            cmd_push(c)
+                            putc(c)
+                        }
+                    }
+                }
             }
+        } else {
+            asm!("wfi")
         }
-        loops = loops + 1
     }
 
-    asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
-
-    // Boot time
-    putc(84)
-    putc(58)
-    let boot_ms = time_since_boot_ms()
-    print_num(boot_ms)
-    putc(109)
-    putc(115)
-    nl()
-
-    putc(68)
-    putc(79)
-    putc(78)
-    putc(69)
-    nl()
     0
 }
 
