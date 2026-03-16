@@ -260,6 +260,10 @@ fn cmd_help() {
     help_line(99, 97, 116, 32, 32, 46)
     // "  stat ."
     help_line(115, 116, 97, 116, 32, 46)
+    // "  mkdir."
+    help_line(109, 107, 100, 105, 114, 46)
+    // "  cp   ."
+    help_line(99, 112, 32, 32, 32, 46)
 }
 
 fn cmd_ps() {
@@ -1938,6 +1942,129 @@ fn cmd_stat() {
     }
 }
 
+fn cmd_is_mkdir() -> i64 {
+    let len = cmd_len()
+    if len < 7 { 0 }
+    else { if cmd_char(0) == 109 { if cmd_char(1) == 107 { if cmd_char(2) == 100 { if cmd_char(3) == 105 { if cmd_char(4) == 114 { if cmd_char(5) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_mkdir() {
+    let mut slot = 1
+    let mut found = 0
+    while slot < 16 {
+        if volatile_read_u8(0x47008000 + slot * 128 + 63) == 0 {
+            if found == 0 {
+                found = 1
+                let base = 0x47008000 + slot * 128
+                let len = cmd_len()
+                let mut i = 6
+                let mut j = 0
+                while i < len {
+                    volatile_write_u8(base + j, cmd_char(i))
+                    j = j + 1
+                    i = i + 1
+                }
+                volatile_write_u8(base + j, 0)
+                volatile_write_u8(base + 63, 2)
+                volatile_write(base + 64, 0)
+            }
+        }
+        slot = slot + 1
+    }
+}
+
+fn cmd_is_cp() -> i64 {
+    let len = cmd_len()
+    if len < 5 { 0 }
+    else { if cmd_char(0) == 99 { if cmd_char(1) == 112 { if cmd_char(2) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_cp() {
+    // "cp <src> <dst>" — copy file
+    // Find src end (space)
+    let len = cmd_len()
+    let mut dst_start = 0
+    let mut i = 3
+    while i < len {
+        if cmd_char(i) == 32 {
+            dst_start = i + 1
+            i = len
+        }
+        i = i + 1
+    }
+    if dst_start == 0 {
+        putc(63)
+        nl()
+    } else {
+        // Find source file
+        let mut src_slot = 0
+        let mut found_src = 0
+        let mut s = 1
+        while s < 16 {
+            let base = 0x47008000 + s * 128
+            if volatile_read_u8(base + 63) == 1 {
+                let mut match_ok = 1
+                let mut j = 0
+                let mut ni = 3
+                while ni < dst_start - 1 {
+                    if volatile_read_u8(base + j) != cmd_char(ni) {
+                        match_ok = 0
+                        ni = dst_start
+                    }
+                    j = j + 1
+                    ni = ni + 1
+                }
+                if match_ok == 1 {
+                    if volatile_read_u8(base + j) == 0 {
+                        src_slot = s
+                        found_src = 1
+                    }
+                }
+            }
+            s = s + 1
+        }
+        if found_src == 1 {
+            // Create dest file
+            let mut d = 1
+            let mut found_dst = 0
+            while d < 16 {
+                if volatile_read_u8(0x47008000 + d * 128 + 63) == 0 {
+                    if found_dst == 0 {
+                        found_dst = 1
+                        let dbase = 0x47008000 + d * 128
+                        let mut di = dst_start
+                        let mut dj = 0
+                        while di < len {
+                            volatile_write_u8(dbase + dj, cmd_char(di))
+                            dj = dj + 1
+                            di = di + 1
+                        }
+                        volatile_write_u8(dbase + dj, 0)
+                        volatile_write_u8(dbase + 63, 1)
+                        let src_size = volatile_read(0x47008000 + src_slot * 128 + 64)
+                        volatile_write(dbase + 64, src_size)
+                        volatile_write(dbase + 72, d * 256)
+                        // Copy data
+                        let src_data = 0x4700A000 + volatile_read(0x47008000 + src_slot * 128 + 72)
+                        let dst_data = 0x4700A000 + d * 256
+                        let mut k = 0
+                        while k < src_size {
+                            volatile_write_u8(dst_data + k, volatile_read_u8(src_data + k))
+                            k = k + 1
+                        }
+                    }
+                }
+                d = d + 1
+            }
+            if found_dst == 0 {
+                putc(102) putc(117) putc(108) putc(108) nl()
+            }
+        } else {
+            putc(63) nl()
+        }
+    }
+}
+
 fn cmd_is_reboot() -> i64 {
     let len = cmd_len()
     if len != 6 { 0 }
@@ -2334,6 +2461,14 @@ fn execute_cmd() {
         }
         if cmd_is_stat() == 1 {
             cmd_stat()
+            handled = 1
+        }
+        if cmd_is_mkdir() == 1 {
+            cmd_mkdir()
+            handled = 1
+        }
+        if cmd_is_cp() == 1 {
+            cmd_cp()
             handled = 1
         }
         if handled == 0 {
