@@ -1,85 +1,182 @@
-// FajarOS v3.0 "Surya" — Kernel Entry Point
+// FajarOS v3.0 "Surya" — Kernel Entry + MMU
 //
 // Build: fj build kernel/boot/start.fj --target aarch64-unknown-none --no-std -o fajaros.elf
 // Run:   qemu-system-aarch64 -M virt -cpu cortex-a76 -m 256M -kernel fajaros.elf -nographic
-
-const UART: i64 = 0x09000000
 
 @panic_handler
 fn panic(code: i64) -> i64 { code }
 
 fn putc(c: i64) {
-    volatile_write(UART, c)
+    volatile_write(0x09000000, c)
 }
 
 fn newline() {
     putc(10)
 }
 
+fn print_ok() {
+    putc(79)
+    putc(75)
+    newline()
+}
+
 fn print_banner() {
-    // "FajarOS v3.0 Surya"
-    putc(70)   // F
-    putc(97)   // a
-    putc(106)  // j
-    putc(97)   // a
-    putc(114)  // r
-    putc(79)   // O
-    putc(83)   // S
-    putc(32)   // (space)
-    putc(118)  // v
-    putc(51)   // 3
-    putc(46)   // .
-    putc(48)   // 0
-    putc(32)   // (space)
-    putc(83)   // S
-    putc(117)  // u
-    putc(114)  // r
-    putc(121)  // y
-    putc(97)   // a
+    putc(70)
+    putc(97)
+    putc(106)
+    putc(97)
+    putc(114)
+    putc(79)
+    putc(83)
+    putc(32)
+    putc(118)
+    putc(51)
+    putc(46)
+    putc(48)
+    putc(32)
+    putc(83)
+    putc(117)
+    putc(114)
+    putc(121)
+    putc(97)
     newline()
 }
 
-fn print_cpu() {
-    // "CPU: OK"
-    putc(67)
-    putc(80)
-    putc(85)
+fn print_label(a: i64, b: i64, c: i64) {
+    putc(a)
+    putc(b)
+    putc(c)
     putc(58)
     putc(32)
-    putc(79)
-    putc(75)
-    newline()
 }
 
-fn print_mem() {
-    // "MEM: OK"
-    putc(77)
-    putc(69)
-    putc(77)
-    putc(58)
-    putc(32)
-    putc(79)
-    putc(75)
-    newline()
+// ═══════════════════════════════════════════════════════════════════
+// MMU — simplified for 4-param limit in bare-metal AOT
+// ═══════════════════════════════════════════════════════════════════
+
+// Page table allocator: use fixed addresses
+// Page 0 = L0, pages 1-16 = L1/L2/L3 tables
+fn pt_zero(addr: i64) {
+    let mut i = 0
+    while i < 4096 {
+        let a = addr + i
+        volatile_write(a, 0)
+        i = i + 8
+    }
 }
 
-fn print_boot_ok() {
-    // "BOOT OK"
+fn pt_index(vaddr: i64, level: i64) -> i64 {
+    let diff = 3 - level
+    let shift = 12 + diff * 9
+    let shifted = vaddr >> shift
+    shifted & 511
+}
+
+// Use 2MB block mappings (L2 level) instead of 4KB pages
+// This avoids deep page table walks and simplifies code
+// L0[47:39] → L1[38:30] → L2[29:21] → 2MB block
+fn map_2mb_block(l0: i64, vaddr: i64, paddr: i64, flags: i64) {
+    // Ensure L1 table exists
+    let l0i = pt_index(vaddr, 0)
+    let l0_a = l0 + l0i * 8
+    let l0e = volatile_read(l0_a)
+    let mut l1 = 0
+    if (l0e & 1) == 0 {
+        // Allocate L1 at next 4KB-aligned address after L0
+        l1 = l0 + 4096 + l0i * 4096
+        pt_zero(l1)
+        volatile_write(l0_a, l1 | 3)
+    } else {
+        l1 = l0e & 0xFFFFFFFFF000
+    }
+
+    // Ensure L2 table exists
+    let l1i = pt_index(vaddr, 1)
+    let l1_a = l1 + l1i * 8
+    let l1e = volatile_read(l1_a)
+    let mut l2 = 0
+    if (l1e & 1) == 0 {
+        l2 = l1 + 4096 + l1i * 4096
+        pt_zero(l2)
+        volatile_write(l1_a, l2 | 3)
+    } else {
+        l2 = l1e & 0xFFFFFFFFF000
+    }
+
+    // L2 block entry (2MB): bit 0 = valid, bit 1 = 0 (block, not table)
+    let l2i = pt_index(vaddr, 2)
+    let l2_a = l2 + l2i * 8
+    let entry = (paddr & 0xFFFFFFE00000) | flags | 1
+    volatile_write(l2_a, entry)
+}
+
+fn map_range_2mb(l0: i64, base: i64, size: i64, flags: i64) {
+    let mut off = 0
+    while off < size {
+        let addr = base + off
+        map_2mb_block(l0, addr, addr, flags)
+        off = off + 0x200000
+    }
+}
+
+fn init_mmu() -> i64 {
+    // MAIR_EL1: idx0=Device(0x00), idx1=Normal-WB(0xFF)
+    asm!("msr MAIR_EL1, x0", in("x0") 0xFF00)
+
+    // TCR_EL1: T0SZ=16, 4KB granule, inner shareable, WB caches
+    asm!("msr TCR_EL1, x0", in("x0") 0x0000000000803510)
+    asm!("isb")
+
+    // L0 page table
+    let l0 = 0x46000000
+    pt_zero(l0)
+
+    // Map MMIO 0x00000000-0x10000000 (256MB, device memory)
+    // flags: AF=1024, valid=1 → 1025 (device-nGnRnE, AttrIndx=0)
+    map_range_2mb(l0, 0x00000000, 0x10000000, 1025)
+
+    // Map kernel 0x40000000-0x50000000 (256MB, normal memory)
+    // flags: AF=1024, SH=768, AttrIndx=1(4), valid=1 → 1797
+    map_range_2mb(l0, 0x40000000, 0x10000000, 1029)
+
+    // Set TTBR0_EL1
+    asm!("msr TTBR0_EL1, x0", in("x0") l0)
+    asm!("isb")
+
+    // Enable MMU
+    let mut sctlr = 0
+    asm!("mrs x0, SCTLR_EL1", out("x0") sctlr)
+    sctlr = sctlr | 1 | 4 | 4096
+    asm!("msr SCTLR_EL1, x0", in("x0") sctlr)
+    asm!("isb")
+
+    l0
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Kernel Main
+// ═══════════════════════════════════════════════════════════════════
+
+fn kernel_main() -> i64 {
+    print_banner()
+
+    print_label(67, 80, 85)
+    print_ok()
+
+    print_label(77, 69, 77)
+    print_ok()
+
+    print_label(77, 77, 85)
+    let mmu_r = init_mmu()
+    print_ok()
+
     putc(66)
     putc(79)
     putc(79)
     putc(84)
     putc(32)
-    putc(79)
-    putc(75)
-    newline()
-}
+    print_ok()
 
-fn kernel_main() -> i64 {
-    print_banner()
-    print_cpu()
-    print_mem()
-    print_boot_ok()
     0
 }
 

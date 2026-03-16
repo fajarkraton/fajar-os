@@ -1,0 +1,213 @@
+// FajarOS — aarch64 MMU (4-level page tables, 4KB granule)
+//
+// Memory map:
+//   0x0000_0000 — 0x0FFF_FFFF  Peripheral MMIO (256MB) → Device-nGnRnE
+//   0x4000_0000 — 0x4FFF_FFFF  Kernel (256MB)           → Normal WB
+//   0x8000_0000 — 0xFFFF_FFFF  User space (2GB)         → Normal WB
+//
+// Page table format (4KB granule, 48-bit VA):
+//   L0[47:39] → L1[38:30] → L2[29:21] → L3[20:12] → offset[11:0]
+//   Each level: 512 entries × 8 bytes = 4096 bytes per table
+//
+// Page table entry bits:
+//   [0]     Valid
+//   [1]     Table (1) or Block (0) — for L0-L2
+//   [4:2]   AttrIndx (MAIR index)
+//   [7:6]   AP (access permission): 00=RW_EL1, 01=RW_ALL, 10=RO_EL1, 11=RO_ALL
+//   [8]     SH[0] (shareability)
+//   [9]     SH[1]
+//   [10]    AF (access flag, must be 1)
+//   [47:12] Output address (physical page frame)
+
+// ═══════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════
+
+const PAGE_SIZE: i64 = 4096
+const PAGE_SHIFT: i64 = 12
+const ENTRIES_PER_TABLE: i64 = 512
+
+// Page table entry flags
+const PTE_VALID: i64 = 1
+const PTE_TABLE: i64 = 2
+const PTE_AF: i64 = 1024             // bit 10: access flag
+const PTE_SH_INNER: i64 = 768        // bits [9:8] = 11: inner shareable
+const PTE_AP_RW_EL1: i64 = 0         // bits [7:6] = 00: RW at EL1
+const PTE_AP_RO_EL1: i64 = 128       // bits [7:6] = 10: RO at EL1
+
+// MAIR attribute indices (set in MAIR_EL1)
+const ATTR_DEVICE_NGNRNE: i64 = 0    // AttrIndx=0: Device-nGnRnE (0x00)
+const ATTR_NORMAL_WB: i64 = 4        // AttrIndx=1: Normal WB (bits [4:2]=001 → 4)
+
+// Common flag combos
+const PTE_KERNEL_RW: i64 = 1027      // VALID | AF | SH_INNER | AP_RW | ATTR_NORMAL
+const PTE_KERNEL_RO: i64 = 1155      // VALID | AF | SH_INNER | AP_RO | ATTR_NORMAL
+const PTE_DEVICE: i64 = 1025         // VALID | AF | SH_INNER | AP_RW | ATTR_DEVICE
+
+// Memory regions
+const MMIO_BASE: i64 = 0x00000000
+const MMIO_SIZE: i64 = 0x10000000    // 256MB
+const KERNEL_BASE: i64 = 0x40000000
+const KERNEL_SIZE: i64 = 0x10000000  // 256MB
+
+// Page table allocation area (within kernel heap)
+const PT_ALLOC_BASE: i64 = 0x46000000
+const PT_ALLOC_SIZE: i64 = 0x01000000  // 16MB for page tables
+
+// ═══════════════════════════════════════════════════════════════════
+// Page Table Allocator (bump, 4KB aligned)
+// ═══════════════════════════════════════════════════════════════════
+
+// Global: next free page table page
+let mut pt_alloc_next: i64 = 0x46000000
+
+fn pt_alloc() -> i64 {
+    let addr = pt_alloc_next
+    pt_alloc_next = pt_alloc_next + PAGE_SIZE
+
+    // Zero the page (512 entries × 8 bytes)
+    let mut i = 0
+    while i < PAGE_SIZE {
+        volatile_write(addr + i, 0)
+        i = i + 8
+    }
+    addr
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Page Table Operations
+// ═══════════════════════════════════════════════════════════════════
+
+// Extract page table index from virtual address at given level
+fn pt_index(vaddr: i64, level: i64) -> i64 {
+    let shift = PAGE_SHIFT + (3 - level) * 9
+    (vaddr >> shift) & 511
+}
+
+// Get entry from page table at index
+fn pt_get_entry(table: i64, index: i64) -> i64 {
+    volatile_read(table + index * 8)
+}
+
+// Set entry in page table at index
+fn pt_set_entry(table: i64, index: i64, entry: i64) {
+    volatile_write(table + index * 8, entry)
+}
+
+// Map a single 4KB page: walk L0→L1→L2→L3, create tables as needed
+fn page_map_4k(l0_table: i64, vaddr: i64, paddr: i64, flags: i64) {
+    // L0 → L1
+    let l0_idx = pt_index(vaddr, 0)
+    let mut l0_entry = pt_get_entry(l0_table, l0_idx)
+    let mut l1_table = 0
+    if (l0_entry & PTE_VALID) == 0 {
+        l1_table = pt_alloc()
+        pt_set_entry(l0_table, l0_idx, l1_table | PTE_TABLE | PTE_VALID)
+    } else {
+        l1_table = l0_entry & 0xFFFFFFFFF000  // mask out flags, get table addr
+    }
+
+    // L1 → L2
+    let l1_idx = pt_index(vaddr, 1)
+    let mut l1_entry = pt_get_entry(l1_table, l1_idx)
+    let mut l2_table = 0
+    if (l1_entry & PTE_VALID) == 0 {
+        l2_table = pt_alloc()
+        pt_set_entry(l1_table, l1_idx, l2_table | PTE_TABLE | PTE_VALID)
+    } else {
+        l2_table = l1_entry & 0xFFFFFFFFF000
+    }
+
+    // L2 → L3
+    let l2_idx = pt_index(vaddr, 2)
+    let mut l2_entry = pt_get_entry(l2_table, l2_idx)
+    let mut l3_table = 0
+    if (l2_entry & PTE_VALID) == 0 {
+        l3_table = pt_alloc()
+        pt_set_entry(l2_table, l2_idx, l3_table | PTE_TABLE | PTE_VALID)
+    } else {
+        l3_table = l2_entry & 0xFFFFFFFFF000
+    }
+
+    // L3: set the final page entry
+    let l3_idx = pt_index(vaddr, 3)
+    let entry = (paddr & 0xFFFFFFFFF000) | flags | PTE_TABLE | PTE_VALID
+    pt_set_entry(l3_table, l3_idx, entry)
+}
+
+// Map a contiguous region (identity-mapped: vaddr == paddr)
+fn map_region(l0_table: i64, base: i64, size: i64, flags: i64) {
+    let mut offset = 0
+    while offset < size {
+        let addr = base + offset
+        page_map_4k(l0_table, addr, addr, flags)
+        offset = offset + PAGE_SIZE
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MMU Configuration
+// ═══════════════════════════════════════════════════════════════════
+
+// Set MAIR_EL1: memory attribute indirection register
+// Index 0: Device-nGnRnE (0x00)
+// Index 1: Normal Write-Back (0xFF)
+fn mmu_set_mair() {
+    // MAIR_EL1 = 0x00000000000000FF (idx0=0x00, idx1=0xFF)
+    let mair = 0xFF00
+    asm!("msr MAIR_EL1, x0", in("x0") mair)
+}
+
+// Set TCR_EL1: translation control register
+// T0SZ=16 (48-bit VA), TG0=00 (4KB granule), SH0=11 (inner shareable)
+// ORGN0=01 (WB-WA), IRGN0=01 (WB-WA)
+fn mmu_set_tcr() {
+    // TCR = T0SZ(16) | TG0(4KB) | SH0(inner) | ORGN0(WB) | IRGN0(WB)
+    let tcr = 0x0000000000803510
+    asm!("msr TCR_EL1, x0", in("x0") tcr)
+    asm!("isb")
+}
+
+// Enable MMU by setting SCTLR_EL1.M=1, I=1, C=1
+fn mmu_enable(l0_table: i64) {
+    // Set TTBR0_EL1 to L0 table address
+    asm!("msr TTBR0_EL1, x0", in("x0") l0_table)
+    asm!("isb")
+
+    // Read current SCTLR_EL1
+    let mut sctlr = 0
+    asm!("mrs x0, SCTLR_EL1", out("x0") sctlr)
+
+    // Set M=1 (MMU enable), C=1 (data cache), I=1 (instruction cache)
+    sctlr = sctlr | 1 | 4 | 4096  // bit 0 = M, bit 2 = C, bit 12 = I
+
+    asm!("msr SCTLR_EL1, x0", in("x0") sctlr)
+    asm!("isb")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Public API: init_mmu()
+// ═══════════════════════════════════════════════════════════════════
+
+fn init_mmu() -> i64 {
+    // 1. Configure memory attributes
+    mmu_set_mair()
+
+    // 2. Configure translation control
+    mmu_set_tcr()
+
+    // 3. Create L0 page table
+    let l0_table = pt_alloc()
+
+    // 4. Identity-map MMIO region (Device memory)
+    // Only map first 16MB of MMIO for now (UART, GIC, etc.)
+    map_region(l0_table, MMIO_BASE, 0x01000000, PTE_DEVICE)
+
+    // 5. Identity-map kernel region (Normal memory)
+    map_region(l0_table, KERNEL_BASE, KERNEL_SIZE, PTE_KERNEL_RW)
+
+    // 6. Enable MMU
+    mmu_enable(l0_table)
+
+    l0_table
+}
