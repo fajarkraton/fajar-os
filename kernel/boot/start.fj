@@ -208,6 +208,16 @@ fn cmd_help() {
     help_line(116, 101, 115, 116, 32, 32)
     // "  top   "
     help_line(116, 111, 112, 32, 32, 32)
+    // "  about "
+    help_line(97, 98, 111, 117, 116, 32)
+    // "  log  ."
+    help_line(108, 111, 103, 32, 32, 46)
+    // "  colors"
+    help_line(99, 111, 108, 111, 114, 115)
+    // "  calc ."
+    help_line(99, 97, 108, 99, 32, 46)
+    // "  reboot"
+    help_line(114, 101, 98, 111, 111, 116)
 }
 
 fn cmd_ps() {
@@ -1026,6 +1036,150 @@ fn cmd_top() {
     nl()
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Sprint 36.extra: about, log, colors, calc, reboot
+// ═══════════════════════════════════════════════════════════════════
+
+fn cmd_is_about() -> i64 {
+    let len = cmd_len()
+    if len != 5 { 0 }
+    else { if cmd_char(0) == 97 { if cmd_char(1) == 98 { if cmd_char(4) == 116 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_about() {
+    putc(70) putc(97) putc(106) putc(97) putc(114) putc(79) putc(83) putc(32)
+    putc(118) putc(51) putc(46) putc(48) putc(32) putc(83) putc(117) putc(114) putc(121) putc(97)
+    nl()
+    // "100% Fajar Lang"
+    putc(49) putc(48) putc(48) putc(37) putc(32)
+    putc(70) putc(97) putc(106) putc(97) putc(114) putc(32) putc(76) putc(97) putc(110) putc(103)
+    nl()
+    // "By: PrimeCore.id"
+    putc(66) putc(121) putc(58) putc(32)
+    putc(80) putc(114) putc(105) putc(109) putc(101) putc(67) putc(111) putc(114) putc(101) putc(46) putc(105) putc(100)
+    nl()
+    // "HW: Dragon Q6A"
+    putc(72) putc(87) putc(58) putc(32)
+    putc(68) putc(114) putc(97) putc(103) putc(111) putc(110) putc(32) putc(81) putc(54) putc(65)
+    nl()
+}
+
+fn cmd_is_log() -> i64 {
+    let len = cmd_len()
+    if len < 3 { 0 }
+    else { if cmd_char(0) == 108 { if cmd_char(1) == 111 { if cmd_char(2) == 103 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_log() {
+    let len = cmd_len()
+    if len == 3 {
+        // Show current level
+        let level = volatile_read(0x47007F08)
+        putc(76) putc(101) putc(118) putc(101) putc(108) putc(58) putc(32)
+        print_num(level)
+        nl()
+    } else {
+        // Set level
+        let level = parse_num_from(4)
+        volatile_write(0x47007F08, level)
+        putc(79) putc(75) nl()
+    }
+}
+
+fn cmd_is_colors() -> i64 {
+    let len = cmd_len()
+    if len != 6 { 0 }
+    else { if cmd_char(0) == 99 { if cmd_char(1) == 111 { if cmd_char(5) == 115 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_colors() {
+    // ANSI color test
+    let mut i = 0
+    while i < 8 {
+        // ESC[3Xm where X = color
+        putc(27) putc(91) putc(51) putc(48 + i) putc(109)
+        // Print color name digit
+        putc(67) putc(48 + i) putc(32)
+        i = i + 1
+    }
+    // Reset: ESC[0m
+    putc(27) putc(91) putc(48) putc(109)
+    nl()
+}
+
+fn cmd_is_calc() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 99 { if cmd_char(1) == 97 { if cmd_char(2) == 108 { if cmd_char(3) == 99 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_calc() {
+    // "calc <a><op><b>" — simple calculator
+    // Find operator (skip "0x" prefix)
+    let len = cmd_len()
+    let mut i = 5
+    let mut op = 0
+    let mut op_pos = 0
+    // Skip first number (digits, hex prefix)
+    if cmd_char(5) == 48 {
+        if cmd_char(6) == 120 {
+            i = 7
+        }
+    }
+    while i < len {
+        let c = cmd_char(i)
+        let is_op = 0
+        if c == 43 { op = 1 op_pos = i }
+        if c == 45 { if i > 7 { op = 2 op_pos = i } }
+        if c == 42 { op = 3 op_pos = i }
+        if c == 47 { op = 4 op_pos = i }
+        if c == 38 { op = 5 op_pos = i }
+        if c == 124 { op = 6 op_pos = i }
+        if c == 94 { op = 7 op_pos = i }
+        if op > 0 {
+            if op_pos == i {
+                i = len
+            }
+        }
+        i = i + 1
+    }
+    let a = parse_num_from(5)
+    if op > 0 {
+        let b = parse_num_from(op_pos + 1)
+        let mut result = 0
+        if op == 1 { result = a + b }
+        if op == 2 { result = a - b }
+        if op == 3 { result = a * b }
+        if op == 4 { if b != 0 { result = a / b } }
+        if op == 5 { result = a & b }
+        if op == 6 { result = a | b }
+        if op == 7 { result = a ^ b }
+        print_num(result)
+        putc(32)
+        putc(40)
+        print_hex32(result)
+        putc(41)
+        nl()
+    } else {
+        putc(63) nl()
+    }
+}
+
+fn cmd_is_reboot() -> i64 {
+    let len = cmd_len()
+    if len != 6 { 0 }
+    else { if cmd_char(0) == 114 { if cmd_char(1) == 101 { if cmd_char(5) == 116 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_reboot() {
+    // "Rebooting..."
+    putc(82) putc(101) putc(98) putc(111) putc(111) putc(116) putc(46) putc(46) putc(46)
+    nl()
+    // Use PSCI SYSTEM_RESET (not available in all QEMU configs)
+    // Fallback: jump to _start
+    asm!("wfi")
+}
+
 // Sprint 36.3 preview: reg command
 fn cmd_is_reg() -> i64 {
     let len = cmd_len()
@@ -1303,6 +1457,26 @@ fn execute_cmd() {
         }
         if cmd_is_top() == 1 {
             cmd_top()
+            handled = 1
+        }
+        if cmd_is_about() == 1 {
+            cmd_about()
+            handled = 1
+        }
+        if cmd_is_log() == 1 {
+            cmd_log()
+            handled = 1
+        }
+        if cmd_is_colors() == 1 {
+            cmd_colors()
+            handled = 1
+        }
+        if cmd_is_calc() == 1 {
+            cmd_calc()
+            handled = 1
+        }
+        if cmd_is_reboot() == 1 {
+            cmd_reboot()
             handled = 1
         }
         if handled == 0 {
