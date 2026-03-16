@@ -1,4 +1,4 @@
-// FajarOS v3.0 "Surya" — Kernel (asm! bug #1 fixed)
+// FajarOS v3.0 "Surya" — Preemptive Scheduler
 //
 // Build: fj build kernel/boot/start.fj --target aarch64-unknown-none --no-std -o fajaros.elf
 // Run:   qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a76 -m 512M -kernel fajaros.elf -nographic
@@ -15,13 +15,6 @@ fn nl() {
 }
 
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
-    let ec = (esr >> 26) & 63
-    if ec == 21 {
-        putc(83)
-        putc(86)
-        putc(67)
-        nl()
-    }
 }
 
 fn fj_exception_irq() {
@@ -32,7 +25,7 @@ fn fj_exception_irq() {
         volatile_write(0x47001008, ticks)
         let mut freq = 0
         asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
-        asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 100)
+        asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 50)
         asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
     }
     asm!("msr ICC_EOIR1_EL1, x0", in("x0") irq)
@@ -52,66 +45,55 @@ fn init_gic() {
 }
 
 fn kernel_main() -> i64 {
-    // Banner: FjOS
     putc(70)
     putc(106)
     putc(79)
     putc(83)
     nl()
 
-    // CPU: read EL
-    putc(69)
-    putc(76)
-    let mut el = 0
-    asm!("mrs x0, CurrentEL", out("x0") el)
-    putc(48 + ((el >> 2) & 3))
-    nl()
-
-    // GIC init
-    putc(71)
-    putc(73)
-    putc(67)
-    putc(32)
-    init_gic()
-    putc(79)
-    putc(75)
-    nl()
-
-    // Timer: set 10ms tick, wait, count ticks
-    putc(84)
-    putc(77)
-    putc(82)
-    putc(32)
+    // Scheduler init BEFORE GIC (no IRQs yet)
+    volatile_write(0x47000008, 2)
+    volatile_write(0x47001000, 0)
     volatile_write(0x47001008, 0)
+    volatile_write(0x47001010, 0)
+
+    // GIC + IRQ enable
+    init_gic()
+    putc(71)
+    nl()
+
+    // Timer
     let mut freq = 0
     asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
-    asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 100)
+    asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 50)
     asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
 
-    // Wait ~0.5s
-    let mut w = 0
-    while w < 5000000 {
-        w = w + 1
+    // Idle loop (process 0)
+    let mut i = 0
+    while i < 10 {
+        putc(48)
+        let mut d = 0
+        while d < 200000 {
+            d = d + 1
+        }
+        i = i + 1
     }
+    nl()
 
-    // Stop timer
     asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
-
-    // Print tick count
     let ticks = volatile_read(0x47001008)
+    putc(84)
     if ticks > 9 {
         putc(43)
     } else {
         putc(48 + ticks)
     }
-    putc(116)
     nl()
 
-    // BOOT
-    putc(66)
+    putc(68)
     putc(79)
-    putc(79)
-    putc(84)
+    putc(78)
+    putc(69)
     nl()
     0
 }
