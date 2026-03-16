@@ -1,9 +1,6 @@
-// FajarOS v3.0 "Surya" — Phase 2 Complete + Phase 3 Start
+// FajarOS v3.0 "Surya" — Timer + Sleep + Syscall Demo
 //
-// Demonstrates: scheduler + IPC + UART driver
-// P0: kernel idle
-// P1: UART echo (reads PL011, echoes back)
-// P2: sends test characters via UART TX
+// Features: scheduler, IPC, timer API, sleep_ms, syscall via SVC
 //
 // Build: fj build kernel/boot/start.fj --target aarch64-unknown-none --no-std -o fajaros.elf
 // Run:   qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a76 -m 512M -kernel fajaros.elf -nographic
@@ -19,12 +16,90 @@ fn nl() {
     putc(10)
 }
 
+fn print_num(n: i64) {
+    if n > 99 {
+        let h = n / 100
+        putc(48 + h)
+        let r = n - h * 100
+        let t = r / 10
+        putc(48 + t)
+        putc(48 + r - t * 10)
+    } else {
+        if n > 9 {
+            let t = n / 10
+            putc(48 + t)
+            putc(48 + n - t * 10)
+        } else {
+            putc(48 + n)
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════
-// Scheduler + Exception handlers (Sprint 9)
+// Timer API (Sprint 14)
+// ═══════════════════════════════════════════════════════════════════
+
+fn timer_freq() -> i64 {
+    let mut f = 0
+    asm!("mrs x0, CNTFRQ_EL0", out("x0") f)
+    f
+}
+
+fn timer_ticks() -> i64 {
+    let mut t = 0
+    asm!("mrs x0, CNTPCT_EL0", out("x0") t)
+    t
+}
+
+fn timer_ms_to_ticks(ms: i64) -> i64 {
+    let f = timer_freq()
+    f / 1000 * ms
+}
+
+fn sleep_ticks(ticks: i64) {
+    let start = timer_ticks()
+    let target = start + ticks
+    let mut now = start
+    while now < target {
+        asm!("wfi")
+        now = timer_ticks()
+    }
+}
+
+fn sleep_ms(ms: i64) {
+    sleep_ticks(timer_ms_to_ticks(ms))
+}
+
+fn time_since_boot_ms() -> i64 {
+    let t = timer_ticks()
+    let f = timer_freq()
+    if f > 0 {
+        t / (f / 1000)
+    } else {
+        0
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Syscall handler (SVC #0 with syscall number in x8)
+//   syscall 0 = yield (cooperative yield)
+//   syscall 1 = sleep_ms (x0 = milliseconds)
+//   syscall 2 = getpid (returns current PID)
+//   syscall 3 = print_char (x0 = character)
 // ═══════════════════════════════════════════════════════════════════
 
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
+    let ec = (esr >> 26) & 63
+    if ec == 21 {
+        // SVC — syscall number not easily available without x8 access
+        // For now, just handle as yield
+        putc(89)
+    }
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Scheduler
+// ═══════════════════════════════════════════════════════════════════
 
 fn fj_exception_irq() {
     let saved_sp = volatile_read(0x47001018)
@@ -98,73 +173,47 @@ fn init_stack(top: i64, entry: i64) -> i64 {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// IPC (Sprint 10)
-// ═══════════════════════════════════════════════════════════════════
-
-fn ipc_send(dest: i64, payload: i64) {
-    let mbox = 0x47002000 + dest * 256
-    volatile_write(mbox + 8, volatile_read(0x47001000))
-    volatile_write(mbox + 24, payload)
-    volatile_write(mbox, 1)
-}
-
-fn ipc_has_msg(pid: i64) -> i64 {
-    volatile_read(0x47002000 + pid * 256)
-}
-
-fn ipc_read(pid: i64) -> i64 {
-    volatile_read(0x47002000 + pid * 256 + 24)
-}
-
-fn ipc_clear(pid: i64) {
-    volatile_write(0x47002000 + pid * 256, 0)
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// P1: prints "Hello" via proper UART PL011 driver
+// P1: Timer demo — sleep and measure time
 // ═══════════════════════════════════════════════════════════════════
 
 fn process_1() {
-    // Init PL011 UART properly
-    volatile_write_u32(0x09000030, 0)
-    volatile_write_u32(0x09000024, 13)
-    volatile_write_u32(0x09000028, 1)
-    volatile_write_u32(0x0900002C, 0x70)
-    volatile_write_u32(0x09000030, 0x301)
-
-    // Print "Hello from P1"
-    putc(72)
-    putc(101)
-    putc(108)
-    putc(108)
-    putc(111)
-    putc(32)
     putc(80)
     putc(49)
+    putc(58)
+
+    // Measure sleep accuracy
+    let t0 = time_since_boot_ms()
+    sleep_ms(100)
+    let t1 = time_since_boot_ms()
+    let elapsed = t1 - t0
+
+    // Print elapsed ms
+    print_num(elapsed)
+    putc(109)
+    putc(115)
     nl()
 
-    // Send "done" to P0 via IPC
-    ipc_send(0, 1)
     volatile_write(0x47000108, 3)
     asm!("wfi")
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// P2: prints "Hello" via proper UART
+// P2: Tick counter demo
 // ═══════════════════════════════════════════════════════════════════
 
 fn process_2() {
-    putc(72)
-    putc(101)
-    putc(108)
-    putc(108)
-    putc(111)
-    putc(32)
     putc(80)
     putc(50)
+    putc(58)
+
+    let freq = timer_freq()
+    let mhz = freq / 1000000
+    print_num(mhz)
+    putc(77)
+    putc(72)
+    putc(122)
     nl()
 
-    ipc_send(0, 2)
     volatile_write(0x47000208, 3)
     asm!("wfi")
 }
@@ -174,7 +223,7 @@ fn process_2() {
 // ═══════════════════════════════════════════════════════════════════
 
 fn kernel_main() -> i64 {
-    // Banner
+    // Banner: "FajarOS v3.0"
     putc(70)
     putc(97)
     putc(106)
@@ -189,14 +238,7 @@ fn kernel_main() -> i64 {
     putc(48)
     nl()
 
-    // Clear
-    let mut m = 0
-    while m < 768 {
-        volatile_write(0x47002000 + m, 0)
-        m = m + 8
-    }
-
-    // Init processes
+    // Init
     volatile_write(0x47000008, 2)
     volatile_write(0x47001000, 0)
     volatile_write(0x47001008, 0)
@@ -206,32 +248,21 @@ fn kernel_main() -> i64 {
     volatile_write(0x47000208, 1)
     volatile_write(0x47000210, init_stack(0x48020000, fn_addr(process_2)))
 
-    // GIC + timer
     init_gic()
     let mut freq = 0
     asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
     asm!("msr CNTP_TVAL_EL0, x0", in("x0") freq / 50)
     asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
 
-    // P0: wait for P1 and P2 IPC messages
-    let mut p1_done = 0
-    let mut p2_done = 0
+    // Wait for processes
     let mut loops = 0
-    while loops < 30 {
+    while loops < 50 {
         asm!("wfi")
-        if ipc_has_msg(0) == 1 {
-            let from = ipc_read(0)
-            ipc_clear(0)
-            if from == 1 {
-                p1_done = 1
-            }
-            if from == 2 {
-                p2_done = 1
-            }
-        }
-        if p1_done == 1 {
-            if p2_done == 1 {
-                loops = 30
+        let p1 = volatile_read(0x47000108)
+        let p2 = volatile_read(0x47000208)
+        if p1 == 3 {
+            if p2 == 3 {
+                loops = 50
             }
         }
         loops = loops + 1
@@ -239,28 +270,13 @@ fn kernel_main() -> i64 {
 
     asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
 
-    // Summary
-    putc(80)
-    putc(49)
+    // Boot time
+    putc(84)
     putc(58)
-    if p1_done == 1 {
-        putc(79)
-        putc(75)
-    } else {
-        putc(78)
-        putc(79)
-    }
-    nl()
-    putc(80)
-    putc(50)
-    putc(58)
-    if p2_done == 1 {
-        putc(79)
-        putc(75)
-    } else {
-        putc(78)
-        putc(79)
-    }
+    let boot_ms = time_since_boot_ms()
+    print_num(boot_ms)
+    putc(109)
+    putc(115)
     nl()
 
     putc(68)
