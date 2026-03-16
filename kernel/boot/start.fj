@@ -1,0 +1,86 @@
+// FajarOS v3.0 "Surya" — Kernel Entry Point
+//
+// Build: fj build kernel/boot/start.fj --target aarch64-unknown-none --no-std -o fajaros.elf
+// Run:   qemu-system-aarch64 -M virt -cpu cortex-a76 -m 256M -kernel fajaros.elf -nographic
+
+const UART: i64 = 0x09000000
+
+@panic_handler
+fn panic(code: i64) -> i64 { code }
+
+fn putc(c: i64) {
+    volatile_write(UART, c)
+}
+
+fn newline() {
+    putc(10)
+}
+
+fn print_banner() {
+    // "FajarOS v3.0 Surya"
+    putc(70)   // F
+    putc(97)   // a
+    putc(106)  // j
+    putc(97)   // a
+    putc(114)  // r
+    putc(79)   // O
+    putc(83)   // S
+    putc(32)   // (space)
+    putc(118)  // v
+    putc(51)   // 3
+    putc(46)   // .
+    putc(48)   // 0
+    putc(32)   // (space)
+    putc(83)   // S
+    putc(117)  // u
+    putc(114)  // r
+    putc(121)  // y
+    putc(97)   // a
+    newline()
+}
+
+fn print_cpu() {
+    // "CPU: OK"
+    putc(67)
+    putc(80)
+    putc(85)
+    putc(58)
+    putc(32)
+    putc(79)
+    putc(75)
+    newline()
+}
+
+fn print_mem() {
+    // "MEM: OK"
+    putc(77)
+    putc(69)
+    putc(77)
+    putc(58)
+    putc(32)
+    putc(79)
+    putc(75)
+    newline()
+}
+
+fn print_boot_ok() {
+    // "BOOT OK"
+    putc(66)
+    putc(79)
+    putc(79)
+    putc(84)
+    putc(32)
+    putc(79)
+    putc(75)
+    newline()
+}
+
+fn kernel_main() -> i64 {
+    print_banner()
+    print_cpu()
+    print_mem()
+    print_boot_ok()
+    0
+}
+
+fn main() -> i64 { 0 }
