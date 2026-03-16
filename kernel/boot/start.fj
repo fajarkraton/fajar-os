@@ -240,6 +240,16 @@ fn cmd_help() {
     help_line(119, 99, 32, 32, 32, 32)
     // "  head ."
     help_line(104, 101, 97, 100, 32, 46)
+    // "  fib  ."
+    help_line(102, 105, 98, 32, 32, 46)
+    // "  fact ."
+    help_line(102, 97, 99, 116, 32, 46)
+    // "  gcd  ."
+    help_line(103, 99, 100, 32, 32, 46)
+    // "  pow  ."
+    help_line(112, 111, 119, 32, 32, 46)
+    // "  sysinf"
+    help_line(115, 121, 115, 105, 110, 102)
 }
 
 fn cmd_ps() {
@@ -1471,6 +1481,169 @@ fn cmd_head() {
     nl()
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Sprint 36.extra batch 4: fib, fact, gcd, pow, sysinfo, banner
+// ═══════════════════════════════════════════════════════════════════
+
+fn cmd_is_fib() -> i64 {
+    let len = cmd_len()
+    if len < 5 { 0 }
+    else { if cmd_char(0) == 102 { if cmd_char(1) == 105 { if cmd_char(2) == 98 { if cmd_char(3) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_fib() {
+    let n = parse_num_from(4)
+    let mut a = 0
+    let mut b = 1
+    let mut i = 0
+    while i < n {
+        let tmp = a + b
+        a = b
+        b = tmp
+        i = i + 1
+    }
+    print_num(a)
+    nl()
+}
+
+fn cmd_is_fact() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 102 { if cmd_char(1) == 97 { if cmd_char(2) == 99 { if cmd_char(3) == 116 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_fact() {
+    let n = parse_num_from(5)
+    let mut result = 1
+    let mut i = 2
+    while i <= n {
+        result = result * i
+        i = i + 1
+    }
+    print_num(result)
+    nl()
+}
+
+fn cmd_is_gcd() -> i64 {
+    let len = cmd_len()
+    if len < 5 { 0 }
+    else { if cmd_char(0) == 103 { if cmd_char(1) == 99 { if cmd_char(2) == 100 { if cmd_char(3) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_gcd() {
+    // "gcd <a> <b>" — Euclidean algorithm
+    let mut a = parse_num_from(4)
+    // Find second number after space
+    let len = cmd_len()
+    let mut i = 4
+    let mut b_start = 0
+    while i < len {
+        if cmd_char(i) == 32 {
+            b_start = i + 1
+            i = len
+        }
+        i = i + 1
+    }
+    let mut b = parse_num_from(b_start)
+    while b > 0 {
+        let tmp = b
+        b = a - (a / b) * b
+        a = tmp
+    }
+    print_num(a)
+    nl()
+}
+
+fn cmd_is_pow() -> i64 {
+    let len = cmd_len()
+    if len < 5 { 0 }
+    else { if cmd_char(0) == 112 { if cmd_char(1) == 111 { if cmd_char(2) == 119 { if cmd_char(3) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_pow() {
+    // "pow <base> <exp>"
+    let base = parse_num_from(4)
+    let len = cmd_len()
+    let mut i = 4
+    let mut e_start = 0
+    while i < len {
+        if cmd_char(i) == 32 {
+            e_start = i + 1
+            i = len
+        }
+        i = i + 1
+    }
+    let exp = parse_num_from(e_start)
+    let mut result = 1
+    let mut j = 0
+    while j < exp {
+        result = result * base
+        j = j + 1
+    }
+    print_num(result)
+    nl()
+}
+
+fn cmd_is_sysinfo() -> i64 {
+    let len = cmd_len()
+    if len != 7 { 0 }
+    else { if cmd_char(0) == 115 { if cmd_char(1) == 121 { if cmd_char(6) == 111 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_sysinfo() {
+    // Comprehensive system info
+    putc(70) putc(97) putc(106) putc(97) putc(114) putc(79) putc(83) putc(32)
+    putc(118) putc(51) putc(46) putc(48)
+    nl()
+
+    // EL
+    let mut el = 0
+    asm!("mrs x0, CurrentEL", out("x0") el)
+    putc(69) putc(76) putc(58) putc(48 + ((el >> 2) & 3))
+    putc(32)
+
+    // Timer
+    let f = timer_freq()
+    print_num(f / 1000000)
+    putc(77) putc(72) putc(122)
+    putc(32)
+
+    // Uptime
+    let ms = uptime_ms()
+    print_num(ms)
+    putc(109) putc(115)
+    nl()
+
+    // Processes
+    let mut running = 0
+    let mut ready = 0
+    let mut p = 0
+    while p < 3 {
+        let st = volatile_read(0x47000000 + p * 256 + 8)
+        if st == 2 { running = running + 1 }
+        if st == 1 { ready = ready + 1 }
+        p = p + 1
+    }
+    putc(80) putc(58)
+    print_num(running)
+    putc(82) putc(32)
+    print_num(ready)
+    putc(87)
+    putc(32)
+
+    // Commands
+    let cmds = volatile_read(0x47004800)
+    print_num(cmds)
+    putc(67)
+    putc(32)
+
+    // Env
+    let envs = volatile_read(0x47006800)
+    print_num(envs)
+    putc(69)
+    nl()
+}
+
 fn cmd_is_reboot() -> i64 {
     let len = cmd_len()
     if len != 6 { 0 }
@@ -1827,6 +2000,26 @@ fn execute_cmd() {
         }
         if cmd_is_head() == 1 {
             cmd_head()
+            handled = 1
+        }
+        if cmd_is_fib() == 1 {
+            cmd_fib()
+            handled = 1
+        }
+        if cmd_is_fact() == 1 {
+            cmd_fact()
+            handled = 1
+        }
+        if cmd_is_gcd() == 1 {
+            cmd_gcd()
+            handled = 1
+        }
+        if cmd_is_pow() == 1 {
+            cmd_pow()
+            handled = 1
+        }
+        if cmd_is_sysinfo() == 1 {
+            cmd_sysinfo()
             handled = 1
         }
         if handled == 0 {
