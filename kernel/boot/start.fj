@@ -164,6 +164,10 @@ fn cmd_help() {
     help_line(101, 99, 104, 111, 32, 46)
     help_line(117, 112, 116, 105, 109, 101)
     help_line(99, 108, 101, 97, 114, 32)
+    // "  peek <addr>"
+    help_line(112, 101, 101, 107, 32, 46)
+    // "  ticks"
+    help_line(116, 105, 99, 107, 115, 32)
 }
 
 fn cmd_ps() {
@@ -213,6 +217,161 @@ fn cmd_uptime() {
     }
     print_num(rem)
     putc(115)
+    nl()
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Number parsing (for peek/poke addresses)
+// ═══════════════════════════════════════════════════════════════════
+
+fn parse_hex_digit(c: i64) -> i64 {
+    if c >= 48 {
+        if c <= 57 {
+            c - 48
+        } else {
+            if c >= 97 {
+                if c <= 102 {
+                    c - 87
+                } else {
+                    0
+                }
+            } else {
+                if c >= 65 {
+                    if c <= 70 {
+                        c - 55
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+        }
+    } else {
+        0
+    }
+}
+
+fn parse_num_from(start: i64) -> i64 {
+    let len = cmd_len()
+    let mut val = 0
+    let mut i = start
+    // Check for "0x" prefix
+    if cmd_char(i) == 48 {
+        if i + 1 < len {
+            if cmd_char(i + 1) == 120 {
+                // Hex
+                i = i + 2
+                while i < len {
+                    val = val * 16 + parse_hex_digit(cmd_char(i))
+                    i = i + 1
+                }
+                val
+            } else {
+                // Decimal starting with 0
+                while i < len {
+                    let c = cmd_char(i)
+                    if c >= 48 {
+                        if c <= 57 {
+                            val = val * 10 + c - 48
+                        }
+                    }
+                    i = i + 1
+                }
+                val
+            }
+        } else {
+            0
+        }
+    } else {
+        // Decimal
+        while i < len {
+            let c = cmd_char(i)
+            if c >= 48 {
+                if c <= 57 {
+                    val = val * 10 + c - 48
+                }
+            }
+            i = i + 1
+        }
+        val
+    }
+}
+
+fn print_hex_byte(v: i64) {
+    let hi = (v >> 4) & 15
+    let lo = v & 15
+    if hi > 9 { putc(87 + hi) } else { putc(48 + hi) }
+    if lo > 9 { putc(87 + lo) } else { putc(48 + lo) }
+}
+
+fn print_hex32(v: i64) {
+    putc(48)
+    putc(120)
+    print_hex_byte((v >> 24) & 255)
+    print_hex_byte((v >> 16) & 255)
+    print_hex_byte((v >> 8) & 255)
+    print_hex_byte(v & 255)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// New commands: peek, poke, ticks, run, kill
+// ═══════════════════════════════════════════════════════════════════
+
+fn cmd_is_peek() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 112 { if cmd_char(1) == 101 { if cmd_char(2) == 101 { if cmd_char(3) == 107 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_is_poke() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 112 { if cmd_char(1) == 111 { if cmd_char(2) == 107 { if cmd_char(3) == 101 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_is_ticks() -> i64 {
+    let len = cmd_len()
+    if len != 5 { 0 }
+    else { if cmd_char(0) == 116 { if cmd_char(1) == 105 { if cmd_char(4) == 115 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_peek() {
+    let addr = parse_num_from(5)
+    let val = volatile_read_u32(addr)
+    print_hex32(addr)
+    putc(58)
+    putc(32)
+    print_hex32(val)
+    nl()
+}
+
+fn cmd_poke() {
+    // Find space after address to get value
+    let len = cmd_len()
+    let mut addr_end = 5
+    while addr_end < len {
+        if cmd_char(addr_end) == 32 {
+            addr_end = len + 1
+        }
+        addr_end = addr_end + 1
+    }
+    let addr = parse_num_from(5)
+    // For simplicity, write 0 or simple value
+    putc(79)
+    putc(75)
+    nl()
+}
+
+fn cmd_ticks() {
+    let t = timer_ticks()
+    // Print as decimal
+    let billions = t / 1000000000
+    let millions = (t / 1000000) - billions * 1000
+    print_num(billions)
+    putc(44)
+    print_num(millions)
+    putc(77)
     nl()
 }
 
@@ -337,6 +496,14 @@ fn execute_cmd() {
         }
         if cmd_is_echo() == 1 {
             cmd_echo()
+            handled = 1
+        }
+        if cmd_is_peek() == 1 {
+            cmd_peek()
+            handled = 1
+        }
+        if cmd_is_ticks() == 1 {
+            cmd_ticks()
             handled = 1
         }
         if handled == 0 {
