@@ -1,0 +1,148 @@
+// FajarOS — Round-Robin Preemptive Scheduler
+//
+// Process table stored in kernel memory at fixed addresses.
+// Each process slot: 256 bytes
+//   [0]   PID (i64)
+//   [8]   State: 0=Free, 1=Ready, 2=Running, 3=Blocked, 4=Terminated
+//   [16]  SP (saved stack pointer)
+//   [24]  PC (saved program counter / entry point)
+//   [32]  Priority (0-7, 0=highest)
+//   [40]  Stack base address
+//   [48]  Stack size
+//   [56]  Reserved
+//   [64-255] Saved registers (x0-x30, ELR, SPSR)
+//
+// Max processes: 16
+// Process table: 0x47000000 (16 × 256 = 4096 bytes)
+// Process stacks: 0x48000000 + pid * 0x10000 (64KB each)
+
+const PROC_TABLE: i64 = 0x47000000
+const PROC_SIZE: i64 = 256
+const MAX_PROCS: i64 = 16
+const STACK_REGION: i64 = 0x48000000
+const STACK_SIZE: i64 = 0x10000
+
+// Process states
+const STATE_FREE: i64 = 0
+const STATE_READY: i64 = 1
+const STATE_RUNNING: i64 = 2
+const STATE_BLOCKED: i64 = 3
+const STATE_TERMINATED: i64 = 4
+
+// Current running process PID
+const CUR_PID_ADDR: i64 = 0x47001000
+
+fn proc_addr(pid: i64) -> i64 {
+    PROC_TABLE + pid * PROC_SIZE
+}
+
+fn proc_get_state(pid: i64) -> i64 {
+    volatile_read(proc_addr(pid) + 8)
+}
+
+fn proc_set_state(pid: i64, state: i64) {
+    volatile_write(proc_addr(pid) + 8, state)
+}
+
+fn proc_get_sp(pid: i64) -> i64 {
+    volatile_read(proc_addr(pid) + 16)
+}
+
+fn proc_set_sp(pid: i64, sp: i64) {
+    volatile_write(proc_addr(pid) + 16, sp)
+}
+
+fn proc_get_pc(pid: i64) -> i64 {
+    volatile_read(proc_addr(pid) + 24)
+}
+
+fn get_current_pid() -> i64 {
+    volatile_read(CUR_PID_ADDR)
+}
+
+fn set_current_pid(pid: i64) {
+    volatile_write(CUR_PID_ADDR, pid)
+}
+
+// Initialize process table (all free)
+fn sched_init() {
+    let mut i = 0
+    while i < MAX_PROCS {
+        let addr = proc_addr(i)
+        volatile_write(addr, i)
+        volatile_write(addr + 8, STATE_FREE)
+        volatile_write(addr + 16, 0)
+        volatile_write(addr + 24, 0)
+        volatile_write(addr + 32, 0)
+        volatile_write(addr + 40, 0)
+        volatile_write(addr + 48, 0)
+        i = i + 1
+    }
+    // PID 0 = kernel (idle) process
+    volatile_write(proc_addr(0) + 8, STATE_RUNNING)
+    set_current_pid(0)
+}
+
+// Create a new process with given entry point
+fn proc_create(entry: i64, priority: i64) -> i64 {
+    // Find free slot
+    let mut pid = 1
+    while pid < MAX_PROCS {
+        if proc_get_state(pid) == STATE_FREE {
+            let addr = proc_addr(pid)
+            volatile_write(addr, pid)
+            volatile_write(addr + 8, STATE_READY)
+            // Stack top (grows down)
+            let stack_top = STACK_REGION + (pid + 1) * STACK_SIZE - 16
+            volatile_write(addr + 16, stack_top)
+            volatile_write(addr + 24, entry)
+            volatile_write(addr + 32, priority)
+            volatile_write(addr + 40, STACK_REGION + pid * STACK_SIZE)
+            volatile_write(addr + 48, STACK_SIZE)
+            return pid
+        }
+        pid = pid + 1
+    }
+    0
+}
+
+// Find next ready process (round-robin from current+1)
+fn sched_next() -> i64 {
+    let cur = get_current_pid()
+    let mut next = cur + 1
+    let mut checked = 0
+    while checked < MAX_PROCS {
+        if next >= MAX_PROCS {
+            next = 0
+        }
+        if proc_get_state(next) == STATE_READY {
+            return next
+        }
+        next = next + 1
+        checked = checked + 1
+    }
+    // No ready process, stay on current (or idle=0)
+    0
+}
+
+// Schedule: called from timer IRQ handler
+// Saves current SP, picks next process, restores next SP
+fn schedule(saved_sp: i64) -> i64 {
+    let cur = get_current_pid()
+
+    // Save current SP
+    proc_set_sp(cur, saved_sp)
+
+    // Mark current as ready (unless terminated)
+    if proc_get_state(cur) == STATE_RUNNING {
+        proc_set_state(cur, STATE_READY)
+    }
+
+    // Pick next
+    let next = sched_next()
+    proc_set_state(next, STATE_RUNNING)
+    set_current_pid(next)
+
+    // Return next process SP
+    proc_get_sp(next)
+}

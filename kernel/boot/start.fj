@@ -238,12 +238,8 @@ fn gic_redist_init() {
 fn gic_cpu_init() {
     asm!("msr ICC_PMR_EL1, x0", in("x0") 0xFF)
     asm!("msr ICC_IGRPEN1_EL1, x0", in("x0") 1)
-    // Clear IRQ mask in DAIF (bit 7 = I)
-    let mut daif = 0
-    asm!("mrs x0, DAIF", out("x0") daif)
-    daif = daif & 0xFFFFFF7F
-    asm!("msr DAIF, x0", in("x0") daif)
-    asm!("isb")
+    // Enable IRQs (DAIFClr #2 via assembly function)
+    irq_enable()
 }
 
 fn gic_init() {
@@ -282,20 +278,61 @@ fn timer_disable() {
     asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
 }
 
-// IRQ handler — GIC-aware
+// Timer tick counter
+const TICK_ADDR: i64 = 0x47001008
+
+fn tick_count() -> i64 {
+    volatile_read(TICK_ADDR)
+}
+
+// IRQ handler — GIC + scheduler
 fn fj_exception_irq() {
     let irq = gic_ack()
     if irq == 30 {
-        // Timer IRQ (PPI 30)
-        // "TIK"
-        putc(84)
-        putc(73)
-        putc(75)
-        newline()
-        // Disable timer to stop further IRQs
-        timer_disable()
+        // Timer tick
+        let ticks = volatile_read(TICK_ADDR) + 1
+        volatile_write(TICK_ADDR, ticks)
+        // Re-arm timer (10ms quantum at ~62MHz QEMU timer)
+        asm!("msr CNTP_TVAL_EL0, x0", in("x0") 620000)
     }
     gic_eoi(irq)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Scheduler — Process table in kernel memory
+// ═══════════════════════════════════════════════════════════════════
+
+const PROC_TABLE: i64 = 0x47000000
+const MAX_PROCS: i64 = 16
+const CUR_PID_ADDR: i64 = 0x47001000
+
+fn proc_addr(pid: i64) -> i64 {
+    PROC_TABLE + pid * 256
+}
+
+fn proc_state(pid: i64) -> i64 {
+    volatile_read(proc_addr(pid) + 8)
+}
+
+fn sched_init() {
+    let mut i = 0
+    while i < 16 {
+        let a = proc_addr(i)
+        volatile_write(a, i)
+        volatile_write(a + 8, 0)
+        i = i + 1
+    }
+    // PID 0 = kernel
+    volatile_write(proc_addr(0) + 8, 2)
+    volatile_write(CUR_PID_ADDR, 0)
+    volatile_write(TICK_ADDR, 0)
+}
+
+fn proc_create(pid: i64, entry: i64) {
+    let a = proc_addr(pid)
+    volatile_write(a, pid)
+    volatile_write(a + 8, 1)
+    volatile_write(a + 24, entry)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -324,16 +361,33 @@ fn kernel_main() -> i64 {
     gic_init()
     print_ok()
 
-    // Timer: enable PPI 30, set short interval, wait for IRQ
+    // Scheduler
+    print_label(83, 67, 72)
+    sched_init()
+    print_ok()
+
+    // Timer: enable PPI 30 for preemptive scheduling
     print_label(84, 77, 82)
     gic_enable_ppi(30)
-    timer_init(1000000)
-    // Busy wait for timer IRQ (handler prints "TIK")
+    // Read timer freq
+    let mut freq = 0
+    asm!("mrs x0, CNTFRQ_EL0", out("x0") freq)
+    // Timer interval: freq/100 = 10ms tick
+    let interval = freq / 100
+    timer_init(interval)
+    // Busy-wait
     let mut wait = 0
-    while wait < 5000000 {
+    while wait < 2000000 {
         wait = wait + 1
     }
-    print_ok()
+    timer_disable()
+    let ticks = tick_count()
+    if ticks > 9 {
+        putc(43)
+    } else {
+        putc(48 + ticks)
+    }
+    newline()
 
     // BOOT OK
     putc(66)
