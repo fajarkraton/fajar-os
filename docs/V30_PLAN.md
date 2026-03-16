@@ -265,16 +265,16 @@ Number  Name                    Context    Description
 
 | # | Task | Status |
 |---|------|--------|
-| 4.1 | Generate bare-metal linker script: ENTRY(_start), kernel memory layout | [ ] |
-| 4.2 | Generate `.text` at 0x4000_0000, `.data`, `.bss`, `.rodata` sections | [ ] |
-| 4.3 | Generate stack setup: 64KB kernel stack at top of kernel region | [ ] |
-| 4.4 | Implement `_start` → zero BSS → set SP → call kernel_main | [ ] |
+| 4.1 | Linker script: ENTRY(_start), .text 0x4000_0000, 16MB kernel + 128MB RAM | [x] |
+| 4.2 | Sections: .text.start, .text, .rodata, .data, .bss with symbols | [x] |
+| 4.3 | Stack: 64KB kernel stack, __stack_top/__stack_bottom symbols | [x] |
+| 4.4 | `_start` → zero BSS → set SP → call kernel_main → WFE halt | [x] |
 | 4.5 | Add EFI binary format output for UEFI boot on Dragon Q6A | [ ] |
 | 4.6 | Implement EFI entry: `efi_main(image_handle, system_table)` | [ ] |
 | 4.7 | EFI: exit boot services, get memory map, jump to kernel | [ ] |
-| 4.8 | Test: bare-metal ELF boots in QEMU with serial output | [ ] |
+| 4.8 | **QEMU boots! "Hi" printed to serial** via volatile_write to PL011 UART | [x] |
 | 4.9 | Test: EFI binary boots in QEMU with OVMF firmware | [ ] |
-| 4.10 | Integration test: full bare-metal pipeline (compile → QEMU → output) | [ ] |
+| 4.10 | Bare-metal runtime in startup asm: volatile r/w, memcpy, memset, halt, print | [x] |
 
 **Phase 1 Gate:**
 - [ ] `fj build --target aarch64-none kernel.fj` produces valid ELF
