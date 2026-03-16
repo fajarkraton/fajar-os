@@ -134,6 +134,18 @@ fn cmd_is_uptime() -> i64 {
 // Shell Commands
 // ═══════════════════════════════════════════════════════════════════
 
+fn help_line(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) {
+    putc(32)
+    putc(32)
+    putc(a)
+    putc(b)
+    putc(c)
+    putc(d)
+    putc(e)
+    putc(f)
+    nl()
+}
+
 fn cmd_help() {
     // "Commands:"
     putc(67)
@@ -146,30 +158,12 @@ fn cmd_help() {
     putc(115)
     putc(58)
     nl()
-    // "  help   - show this"
-    putc(32)
-    putc(32)
-    putc(104)
-    putc(101)
-    putc(108)
-    putc(112)
-    nl()
-    // "  ps     - process list"
-    putc(32)
-    putc(32)
-    putc(112)
-    putc(115)
-    nl()
-    // "  uptime - boot time"
-    putc(32)
-    putc(32)
-    putc(117)
-    putc(112)
-    putc(116)
-    putc(105)
-    putc(109)
-    putc(101)
-    nl()
+    help_line(104, 101, 108, 112, 32, 32)
+    help_line(112, 115, 32, 32, 32, 32)
+    help_line(109, 101, 109, 32, 32, 32)
+    help_line(101, 99, 104, 111, 32, 46)
+    help_line(117, 112, 116, 105, 109, 101)
+    help_line(99, 108, 101, 97, 114, 32)
 }
 
 fn cmd_ps() {
@@ -236,6 +230,85 @@ fn prompt() {
     putc(32)
 }
 
+fn cmd_is_clear() -> i64 {
+    let len = cmd_len()
+    if len != 5 { 0 }
+    else { if cmd_char(0) == 99 { if cmd_char(1) == 108 { if cmd_char(4) == 114 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_is_mem() -> i64 {
+    let len = cmd_len()
+    if len != 3 { 0 }
+    else { if cmd_char(0) == 109 { if cmd_char(1) == 101 { if cmd_char(2) == 109 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_is_echo() -> i64 {
+    let len = cmd_len()
+    if len < 5 { 0 }
+    else { if cmd_char(0) == 101 { if cmd_char(1) == 99 { if cmd_char(2) == 104 { if cmd_char(3) == 111 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_clear_screen() {
+    // Send ESC[2J ESC[H (clear screen + home)
+    putc(27)
+    putc(91)
+    putc(50)
+    putc(74)
+    putc(27)
+    putc(91)
+    putc(72)
+}
+
+fn cmd_echo() {
+    // Print everything after "echo "
+    let len = cmd_len()
+    let mut i = 5
+    while i < len {
+        putc(cmd_char(i))
+        i = i + 1
+    }
+    nl()
+}
+
+fn cmd_mem() {
+    // "Kernel stack: 64KB"
+    putc(83)
+    putc(116)
+    putc(97)
+    putc(99)
+    putc(107)
+    putc(58)
+    putc(32)
+    putc(54)
+    putc(52)
+    putc(75)
+    putc(66)
+    nl()
+    // "Timer: 62MHz"
+    putc(84)
+    putc(105)
+    putc(109)
+    putc(101)
+    putc(114)
+    putc(58)
+    putc(32)
+    let f = timer_freq()
+    print_num(f / 1000000)
+    putc(77)
+    putc(72)
+    putc(122)
+    nl()
+    // "EL: 1"
+    putc(69)
+    putc(76)
+    putc(58)
+    putc(32)
+    let mut el = 0
+    asm!("mrs x0, CurrentEL", out("x0") el)
+    putc(48 + ((el >> 2) & 3))
+    nl()
+}
+
 fn execute_cmd() {
     let len = cmd_len()
     if len == 0 {
@@ -252,6 +325,18 @@ fn execute_cmd() {
         }
         if cmd_is_uptime() == 1 {
             cmd_uptime()
+            handled = 1
+        }
+        if cmd_is_clear() == 1 {
+            cmd_clear_screen()
+            handled = 1
+        }
+        if cmd_is_mem() == 1 {
+            cmd_mem()
+            handled = 1
+        }
+        if cmd_is_echo() == 1 {
+            cmd_echo()
             handled = 1
         }
         if handled == 0 {
