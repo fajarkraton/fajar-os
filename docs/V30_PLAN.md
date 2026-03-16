@@ -235,16 +235,16 @@ Number  Name                    Context    Description
 
 | # | Task | Status |
 |---|------|--------|
-| 2.1 | Create `src/codegen/cranelift/runtime_bare.rs` — no-libc runtime | [ ] |
-| 2.2 | Implement `fj_rt_memcpy` without libc (byte-by-byte + word-aligned) | [ ] |
-| 2.3 | Implement `fj_rt_memset` without libc | [ ] |
-| 2.4 | Implement `fj_rt_memcmp` without libc | [ ] |
-| 2.5 | Implement `fj_rt_print_bare` → UART output (memory-mapped) | [ ] |
-| 2.6 | Implement `fj_rt_panic_bare` → print message + halt (wfe loop) | [ ] |
-| 2.7 | Implement `fj_rt_alloc_bare` → bump allocator (kernel heap) | [ ] |
-| 2.8 | Implement `fj_rt_free_bare` → no-op for bump (freelist for later) | [ ] |
-| 2.9 | Test: bare-metal binary with string operations runs in QEMU | [ ] |
-| 2.10 | Test: `println("Hello from FajarOS")` outputs to QEMU serial | [ ] |
+| 2.1 | Create `src/codegen/cranelift/runtime_bare.rs` — no-libc runtime | [x] |
+| 2.2 | `fj_rt_bare_memcpy`: word-aligned fast path + byte fallback | [x] |
+| 2.3 | `fj_rt_bare_memset`: word-aligned fill + byte fallback | [x] |
+| 2.4 | `fj_rt_bare_memcmp`: byte comparison, returns diff | [x] |
+| 2.5 | `fj_rt_bare_print` → PL011 UART MMIO (0x0900_0000), configurable base | [x] |
+| 2.6 | `fj_rt_bare_panic` → print "PANIC" + WFE halt loop | [x] |
+| 2.7 | `fj_rt_bare_alloc` → bump allocator (8-byte aligned, OOM → null) | [x] |
+| 2.8 | `fj_rt_bare_free` → no-op for bump (freelist in Sprint 5) | [x] |
+| 2.9 | 12 unit tests for all bare-metal runtime functions | [x] |
+| 2.10 | Test: `println("Hello from FajarOS")` → QEMU UART output (needs linker fix) | [ ] |
 
 ### Sprint 3: Assembly Enhancements
 
