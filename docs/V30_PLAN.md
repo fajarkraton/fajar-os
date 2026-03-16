@@ -862,20 +862,133 @@ Number  Name                    Context    Description
 > **Goal:** Usable system with shell, REPL, and demo applications.
 > **Gate:** User can log in, run commands, write and run Fajar Lang programs.
 
-### Sprint 36: FajarOS Shell (fjsh)
+### Sprint 36: FajarOS Shell (fjsh) — Core (11/57 done)
 
-| # | Task | Status |
-|---|------|--------|
-| 36.1 | Implement shell: prompt, readline, command parsing | [ ] |
-| 36.2 | Implement built-in commands: cd, pwd, echo, export, exit | [ ] |
-| 36.3 | Implement filesystem commands: ls, cat, mkdir, rm, cp, mv | [ ] |
-| 36.4 | Implement process commands: ps, kill, top (CPU/memory usage) | [ ] |
-| 36.5 | Implement system commands: reboot, poweroff, date, uptime | [ ] |
-| 36.6 | Implement device commands: gpio, uart, i2c, spi (direct access) | [ ] |
-| 36.7 | Implement AI commands: npu-info, npu-infer, gpu-info, gpu-bench | [ ] |
-| 36.8 | Implement network commands: ifconfig, ping, curl, ssh | [ ] |
-| 36.9 | Implement command history (up/down arrows, 1000 entries) | [ ] |
-| 36.10 | Implement tab completion for commands and file paths | [ ] |
+> **Target:** 57 commands — professional general-purpose OS shell.
+> FajarOS is NOT an embedded OS. It's a general-purpose AI-integrated OS.
+
+**Current (11 commands — DONE):**
+
+| # | Command | Description | Status |
+|---|---------|-------------|--------|
+| 36.0.1 | `help` | List all commands | [x] |
+| 36.0.2 | `ps` | Process table (PID, state) | [x] |
+| 36.0.3 | `mem` | Stack size, timer freq, EL | [x] |
+| 36.0.4 | `echo <text>` | Print text to console | [x] |
+| 36.0.5 | `uptime` | Time since boot (seconds) | [x] |
+| 36.0.6 | `clear` | Clear screen (ANSI escape) | [x] |
+| 36.0.7 | `peek <addr>` | Read 32-bit from address (hex) | [x] |
+| 36.0.8 | `poke <addr> <val>` | Write 32-bit to address (hex) | [x] |
+| 36.0.9 | `dump <addr>` | 64-byte hex dump + ASCII | [x] |
+| 36.0.10 | `ticks` | Raw timer counter value | [x] |
+| 36.0.11 | `sleep <ms>` | Sleep for N milliseconds | [x] |
+
+**Sprint 36.1: System Commands (9 commands)**
+
+| # | Command | Description | Status |
+|---|---------|-------------|--------|
+| 36.1.1 | `version` | FajarOS version + build info | [ ] |
+| 36.1.2 | `reboot` | Warm reboot via PSCI or watchdog | [ ] |
+| 36.1.3 | `halt` | Halt CPU (WFE loop) | [ ] |
+| 36.1.4 | `date` | Show current date/time (from RTC or boot+uptime) | [ ] |
+| 36.1.5 | `env` | Show environment variables | [ ] |
+| 36.1.6 | `export <k>=<v>` | Set environment variable | [ ] |
+| 36.1.7 | `alias <name>=<cmd>` | Define command alias | [ ] |
+| 36.1.8 | `history` | Show command history | [ ] |
+| 36.1.9 | `whoami` | Show current user (always "root") | [ ] |
+
+**Sprint 36.2: Process Commands (8 commands)**
+
+| # | Command | Description | Status |
+|---|---------|-------------|--------|
+| 36.2.1 | `run <fn>` | Spawn new process from function name | [ ] |
+| 36.2.2 | `kill <pid>` | Terminate process by PID | [ ] |
+| 36.2.3 | `top` | Live process CPU/tick usage | [ ] |
+| 36.2.4 | `nice <pid> <pri>` | Set process priority (0-7) | [ ] |
+| 36.2.5 | `wait <pid>` | Wait for process to finish | [ ] |
+| 36.2.6 | `jobs` | List running background processes | [ ] |
+| 36.2.7 | `bg <cmd>` | Run command in background process | [ ] |
+| 36.2.8 | `fg <pid>` | Bring background process to foreground | [ ] |
+
+**Sprint 36.3: Memory & Debug Commands (9 commands)**
+
+| # | Command | Description | Status |
+|---|---------|-------------|--------|
+| 36.3.1 | `free` | Show memory usage (heap, stack, page tables) | [ ] |
+| 36.3.2 | `fill <addr> <len> <val>` | Fill memory region with value | [ ] |
+| 36.3.3 | `cmp <a1> <a2> <len>` | Compare two memory regions | [ ] |
+| 36.3.4 | `reg` | Show CPU registers (EL, SCTLR, DAIF, etc.) | [ ] |
+| 36.3.5 | `trace on/off` | Enable/disable function call tracing | [ ] |
+| 36.3.6 | `log <level>` | Set kernel log level (error/warn/info/debug) | [ ] |
+| 36.3.7 | `dmesg` | Show kernel log buffer | [ ] |
+| 36.3.8 | `hex <expr>` | Hex calculator (add, sub, mul, and, or, xor) | [ ] |
+| 36.3.9 | `base64 <data>` | Base64 encode/decode | [ ] |
+
+**Sprint 36.4: Hardware Commands (7 commands)**
+
+| # | Command | Description | Status |
+|---|---------|-------------|--------|
+| 36.4.1 | `gpio <pin> [in/out/high/low/read]` | Direct GPIO control | [ ] |
+| 36.4.2 | `uart <port> <baud> [send/recv]` | UART communication | [ ] |
+| 36.4.3 | `i2c <bus> <addr> [read/write] <data>` | I2C device access | [ ] |
+| 36.4.4 | `spi <port> <data>` | SPI transfer | [ ] |
+| 36.4.5 | `npu [info/infer <model>]` | NPU status and inference | [ ] |
+| 36.4.6 | `gpu [info/bench]` | GPU status and benchmark | [ ] |
+| 36.4.7 | `sensor` | Read all connected sensors | [ ] |
+
+**Sprint 36.5: File Commands (11 commands, requires VFS)**
+
+| # | Command | Description | Status |
+|---|---------|-------------|--------|
+| 36.5.1 | `ls [path]` | List directory contents | [ ] |
+| 36.5.2 | `cat <file>` | Print file contents | [ ] |
+| 36.5.3 | `mkdir <path>` | Create directory | [ ] |
+| 36.5.4 | `rm <path>` | Remove file or directory | [ ] |
+| 36.5.5 | `cp <src> <dst>` | Copy file | [ ] |
+| 36.5.6 | `mv <src> <dst>` | Move/rename file | [ ] |
+| 36.5.7 | `touch <file>` | Create empty file | [ ] |
+| 36.5.8 | `stat <path>` | Show file metadata (size, dates) | [ ] |
+| 36.5.9 | `df` | Disk free space | [ ] |
+| 36.5.10 | `du <path>` | Disk usage | [ ] |
+| 36.5.11 | `find <path> <name>` | Search for files | [ ] |
+
+**Sprint 36.6: Network Commands (5 commands, requires TCP/IP)**
+
+| # | Command | Description | Status |
+|---|---------|-------------|--------|
+| 36.6.1 | `ifconfig` | Show network interfaces | [ ] |
+| 36.6.2 | `ping <host>` | ICMP echo request | [ ] |
+| 36.6.3 | `curl <url>` | HTTP GET request | [ ] |
+| 36.6.4 | `ssh <host>` | SSH client | [ ] |
+| 36.6.5 | `netstat` | Network connections | [ ] |
+
+**Sprint 36.7: Test & Benchmark Commands (2 commands)**
+
+| # | Command | Description | Status |
+|---|---------|-------------|--------|
+| 36.7.1 | `test` | Run kernel self-test suite | [ ] |
+| 36.7.2 | `bench` | Run CPU/memory/timer benchmark | [ ] |
+
+**Sprint 36.8: Shell Features**
+
+| # | Feature | Description | Status |
+|---|---------|-------------|--------|
+| 36.8.1 | Command history | Up/down arrows, 100 entries | [ ] |
+| 36.8.2 | Tab completion | Commands + file paths | [ ] |
+| 36.8.3 | Pipe support | `cmd1 \| cmd2` | [ ] |
+| 36.8.4 | Redirect | `cmd > file`, `cmd >> file` | [ ] |
+| 36.8.5 | Scripting | `fjsh script.sh` — run command file | [ ] |
+
+**Shell Gate (57 commands total):**
+- [ ] 11 core commands (DONE)
+- [ ] 9 system commands
+- [ ] 8 process commands
+- [ ] 9 memory/debug commands
+- [ ] 7 hardware commands
+- [ ] 11 file commands (requires VFS)
+- [ ] 5 network commands (requires TCP/IP)
+- [ ] 2 test/benchmark commands
+- [ ] 5 shell features (history, tab, pipe, redirect, scripting)
 
 ### Sprint 37: On-Device REPL & Compiler
 
