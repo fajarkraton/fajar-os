@@ -197,12 +197,105 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
     }
 }
 
-// IRQ handler (stub — will be expanded with GIC in Sprint 8)
+// ═══════════════════════════════════════════════════════════════════
+// GICv3 (QEMU -M virt: GICD=0x08000000, GICR=0x080A0000)
+// ═══════════════════════════════════════════════════════════════════
+
+fn gic_dist_init() {
+    // Disable distributor
+    volatile_write_u32(0x08000000, 0)
+    // Clear + disable all SPIs
+    let mut i = 1
+    while i < 32 {
+        volatile_write_u32(0x08000180 + i * 4, 0xFFFFFFFF)
+        volatile_write_u32(0x08000280 + i * 4, 0xFFFFFFFF)
+        volatile_write_u32(0x08000080 + i * 4, 0xFFFFFFFF)
+        i = i + 1
+    }
+    // Enable distributor group 1
+    volatile_write_u32(0x08000000, 2)
+}
+
+fn gic_redist_init() {
+    // Wake redistributor
+    let waker = volatile_read_u32(0x080A0014)
+    volatile_write_u32(0x080A0014, waker & 0xFFFFFFFD)
+    // Wait for wake
+    let mut n = 0
+    while n < 1000 {
+        let w = volatile_read_u32(0x080A0014)
+        if ((w >> 2) & 1) == 0 {
+            n = 1000
+        }
+        n = n + 1
+    }
+    // All SGI/PPI to group 1, disabled, clear pending
+    volatile_write_u32(0x080B0080, 0xFFFFFFFF)
+    volatile_write_u32(0x080B0180, 0xFFFFFFFF)
+    volatile_write_u32(0x080B0280, 0xFFFFFFFF)
+}
+
+fn gic_cpu_init() {
+    asm!("msr ICC_PMR_EL1, x0", in("x0") 0xFF)
+    asm!("msr ICC_IGRPEN1_EL1, x0", in("x0") 1)
+    // Clear IRQ mask in DAIF (bit 7 = I)
+    let mut daif = 0
+    asm!("mrs x0, DAIF", out("x0") daif)
+    daif = daif & 0xFFFFFF7F
+    asm!("msr DAIF, x0", in("x0") daif)
+    asm!("isb")
+}
+
+fn gic_init() {
+    gic_dist_init()
+    gic_redist_init()
+    gic_cpu_init()
+}
+
+fn gic_enable_ppi(irq: i64) {
+    let bit = 1 << irq
+    volatile_write_u32(0x080B0100, bit)
+}
+
+fn gic_ack() -> i64 {
+    let mut iar = 0
+    asm!("mrs x0, ICC_IAR1_EL1", out("x0") iar)
+    iar & 0xFFFFFF
+}
+
+fn gic_eoi(irq: i64) {
+    asm!("msr ICC_EOIR1_EL1, x0", in("x0") irq)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Timer (aarch64 generic timer, PPI 30)
+// ═══════════════════════════════════════════════════════════════════
+
+fn timer_init(interval: i64) {
+    // Set timer value
+    asm!("msr CNTP_TVAL_EL0, x0", in("x0") interval)
+    // Enable timer: CNTP_CTL_EL0 bit 0 = enable
+    asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
+}
+
+fn timer_disable() {
+    asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
+}
+
+// IRQ handler — GIC-aware
 fn fj_exception_irq() {
-    putc(73)
-    putc(82)
-    putc(81)
-    newline()
+    let irq = gic_ack()
+    if irq == 30 {
+        // Timer IRQ (PPI 30)
+        // "TIK"
+        putc(84)
+        putc(73)
+        putc(75)
+        newline()
+        // Disable timer to stop further IRQs
+        timer_disable()
+    }
+    gic_eoi(irq)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -222,9 +315,24 @@ fn kernel_main() -> i64 {
     let mmu_r = init_mmu()
     print_ok()
 
-    // EXC: test SVC exception → should print "SVC" then return
     print_label(69, 88, 67)
     asm!("svc #0")
+    print_ok()
+
+    // GIC
+    print_label(71, 73, 67)
+    gic_init()
+    print_ok()
+
+    // Timer: enable PPI 30, set short interval, wait for IRQ
+    print_label(84, 77, 82)
+    gic_enable_ppi(30)
+    timer_init(1000000)
+    // Busy wait for timer IRQ (handler prints "TIK")
+    let mut wait = 0
+    while wait < 5000000 {
+        wait = wait + 1
+    }
     print_ok()
 
     // BOOT OK
