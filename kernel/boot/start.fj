@@ -168,6 +168,12 @@ fn cmd_help() {
     help_line(112, 101, 101, 107, 32, 46)
     // "  ticks"
     help_line(116, 105, 99, 107, 115, 32)
+    // "  poke ."
+    help_line(112, 111, 107, 101, 32, 46)
+    // "  dump ."
+    help_line(100, 117, 109, 112, 32, 46)
+    // "  sleep."
+    help_line(115, 108, 101, 101, 112, 46)
 }
 
 fn cmd_ps() {
@@ -252,50 +258,47 @@ fn parse_hex_digit(c: i64) -> i64 {
     }
 }
 
+fn is_space(c: i64) -> i64 {
+    if c == 32 { 1 } else { 0 }
+}
+
 fn parse_num_from(start: i64) -> i64 {
     let len = cmd_len()
     let mut val = 0
     let mut i = start
-    // Check for "0x" prefix
-    if cmd_char(i) == 48 {
+    if i >= len { 0 }
+    else { if cmd_char(i) == 48 {
         if i + 1 < len {
             if cmd_char(i + 1) == 120 {
-                // Hex
+                // Hex: 0x...
                 i = i + 2
                 while i < len {
-                    val = val * 16 + parse_hex_digit(cmd_char(i))
-                    i = i + 1
+                    let c = cmd_char(i)
+                    if is_space(c) == 1 {
+                        i = len
+                    } else {
+                        val = val * 16 + parse_hex_digit(c)
+                        i = i + 1
+                    }
                 }
                 val
             } else {
-                // Decimal starting with 0
                 while i < len {
                     let c = cmd_char(i)
-                    if c >= 48 {
-                        if c <= 57 {
-                            val = val * 10 + c - 48
-                        }
-                    }
-                    i = i + 1
+                    if is_space(c) == 1 { i = len }
+                    else { if c >= 48 { if c <= 57 { val = val * 10 + c - 48 } } i = i + 1 }
                 }
                 val
             }
-        } else {
-            0
-        }
+        } else { 0 }
     } else {
-        // Decimal
         while i < len {
             let c = cmd_char(i)
-            if c >= 48 {
-                if c <= 57 {
-                    val = val * 10 + c - 48
-                }
-            }
-            i = i + 1
+            if is_space(c) == 1 { i = len }
+            else { if c >= 48 { if c <= 57 { val = val * 10 + c - 48 } } i = i + 1 }
         }
         val
-    }
+    } }
 }
 
 fn print_hex_byte(v: i64) {
@@ -346,20 +349,147 @@ fn cmd_peek() {
     nl()
 }
 
-fn cmd_poke() {
-    // Find space after address to get value
+// parse_num_at: parse number starting at position, stop at space or end
+fn parse_num_at(start: i64) -> i64 {
+    // Save original cmd buffer end, temporarily null-terminate at next space
     let len = cmd_len()
-    let mut addr_end = 5
-    while addr_end < len {
-        if cmd_char(addr_end) == 32 {
-            addr_end = len + 1
+    let mut end = start
+    while end < len {
+        if cmd_char(end) == 32 {
+            end = len
         }
-        addr_end = addr_end + 1
+        end = end + 1
     }
+    parse_num_from(start)
+}
+
+// Find second argument position (after first space after pos 5)
+fn find_arg2() -> i64 {
+    let len = cmd_len()
+    let mut i = 5
+    // Skip first arg
+    while i < len {
+        if cmd_char(i) == 32 {
+            i = i + 1
+            if i < len {
+                i
+            } else {
+                0
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    0
+}
+
+fn cmd_poke() {
+    // "poke <addr> <value>"
     let addr = parse_num_from(5)
-    // For simplicity, write 0 or simple value
-    putc(79)
-    putc(75)
+    // Find value after second space
+    let len = cmd_len()
+    let mut i = 5
+    let mut found_space = 0
+    let mut val_start = 0
+    while i < len {
+        if cmd_char(i) == 32 {
+            if found_space == 0 {
+                found_space = 1
+                val_start = i + 1
+            }
+        }
+        i = i + 1
+    }
+    if found_space == 1 {
+        let val = parse_num_from(val_start)
+        volatile_write_u32(addr, val)
+        print_hex32(addr)
+        putc(32)
+        putc(60)
+        putc(45)
+        putc(32)
+        print_hex32(val)
+        nl()
+    } else {
+        // No value — write 0
+        volatile_write_u32(addr, 0)
+        print_hex32(addr)
+        putc(32)
+        putc(60)
+        putc(45)
+        putc(32)
+        putc(48)
+        nl()
+    }
+}
+
+fn cmd_is_dump() -> i64 {
+    let len = cmd_len()
+    if len < 6 { 0 }
+    else { if cmd_char(0) == 100 { if cmd_char(1) == 117 { if cmd_char(2) == 109 { if cmd_char(3) == 112 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_dump() {
+    // "dump <addr>" — show 64 bytes (4 rows of 16)
+    let base = parse_num_from(5)
+    let mut row = 0
+    while row < 4 {
+        let addr = base + row * 16
+        print_hex32(addr)
+        putc(58)
+        let mut col = 0
+        while col < 16 {
+            if (col & 3) == 0 {
+                putc(32)
+            }
+            let b = volatile_read_u8(addr + col)
+            print_hex_byte(b)
+            col = col + 1
+        }
+        putc(32)
+        putc(124)
+        // ASCII representation
+        let mut col2 = 0
+        while col2 < 16 {
+            let b2 = volatile_read_u8(addr + col2)
+            if b2 >= 32 {
+                if b2 < 127 {
+                    putc(b2)
+                } else {
+                    putc(46)
+                }
+            } else {
+                putc(46)
+            }
+            col2 = col2 + 1
+        }
+        putc(124)
+        nl()
+        row = row + 1
+    }
+}
+
+fn cmd_is_sleep() -> i64 {
+    let len = cmd_len()
+    if len < 7 { 0 }
+    else { if cmd_char(0) == 115 { if cmd_char(1) == 108 { if cmd_char(2) == 101 { if cmd_char(3) == 101 { if cmd_char(4) == 112 { if cmd_char(5) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_sleep() {
+    let ms = parse_num_from(6)
+    let t0 = uptime_ms()
+    // Busy-wait based sleep (no timer IRQ needed)
+    let f = timer_freq()
+    let target = timer_ticks() + f / 1000 * ms
+    let mut now = timer_ticks()
+    while now < target {
+        now = timer_ticks()
+    }
+    let t1 = uptime_ms()
+    let elapsed = t1 - t0
+    print_num(elapsed)
+    putc(109)
+    putc(115)
     nl()
 }
 
@@ -504,6 +634,18 @@ fn execute_cmd() {
         }
         if cmd_is_ticks() == 1 {
             cmd_ticks()
+            handled = 1
+        }
+        if cmd_is_poke() == 1 {
+            cmd_poke()
+            handled = 1
+        }
+        if cmd_is_dump() == 1 {
+            cmd_dump()
+            handled = 1
+        }
+        if cmd_is_sleep() == 1 {
+            cmd_sleep()
             handled = 1
         }
         if handled == 0 {
