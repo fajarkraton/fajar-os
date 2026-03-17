@@ -3430,9 +3430,8 @@ fn timer_rearm() {
 }
 
 fn timer_irq_total() -> i64 {
-    // Timer fires but counting doesn't work in IRQ handler yet
-    // (register clobber issue with any memory function after timer_set)
-    0
+    // Read IRQ flag (set to 1 by IRQ handler via sched_write_proc)
+    volatile_read_u32(0x47001020)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3453,8 +3452,10 @@ fn fj_exception_irq() {
     let irq = gic_ack()
 
     if irq == 30 {
-        // Timer interrupt — rearm ONLY (proven to work)
         timer_set(625000)
+        // Increment IRQ counter: read → add 1 → write
+        let count = sched_read_proc(0x47001020)
+        sched_write_proc(0x47001020, count + 1)
     }
 
     // EOI
