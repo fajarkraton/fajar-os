@@ -41,16 +41,11 @@ fn print_num(n: i64) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn timer_ticks() -> i64 {
-    let mut t = 0
-    asm!("mrs x0, CNTPCT_EL0", out("x0") t)
-    t
+    timer_count()
 }
 
-fn timer_freq() -> i64 {
-    let mut f = 0
-    asm!("mrs x0, CNTFRQ_EL0", out("x0") f)
-    f
-}
+// timer_freq() is now a compiler builtin (fj_rt_bare_timer_freq)
+// All calls to timer_freq() throughout this file go directly to the builtin.
 
 fn uptime_ms() -> i64 {
     let t = timer_ticks()
@@ -599,13 +594,28 @@ fn cmd_sleep() {
 
 fn cmd_ticks() {
     let t = timer_ticks()
-    // Print as decimal
-    let billions = t / 1000000000
-    let millions = (t / 1000000) - billions * 1000
-    print_num(billions)
-    putc(44)
-    print_num(millions)
-    putc(77)
+    let ms = uptime_ms()
+    // Print uptime in seconds.ms
+    print_num(ms / 1000)
+    putc(46)
+    print_num(ms % 1000)
+    // " s (timer active)"
+    putc(115)
+    putc(32)
+    putc(40)
+    // Print timer status
+    let ctl = timer_status()
+    if (ctl & 1) == 1 {
+        // "ON"
+        putc(79)
+        putc(78)
+    } else {
+        // "OFF"
+        putc(79)
+        putc(70)
+        putc(70)
+    }
+    putc(41)
     nl()
 }
 
@@ -3343,16 +3353,108 @@ fn execute_cmd() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Exception handlers (minimal, no scheduler needed for shell)
+// GICv3 Interrupt Controller (inline for single-file build)
+// ═══════════════════════════════════════════════════════════════════
+
+fn gic_init() {
+    // GICD: Disable distributor, clear SPIs, set group 1, enable
+    let gicd = 0x08000000
+    volatile_write_u32(gicd, 0)
+    let mut i = 1
+    while i < 32 {
+        volatile_write_u32(gicd + 0x0180 + i * 4, 0xFFFFFFFF)
+        volatile_write_u32(gicd + 0x0280 + i * 4, 0xFFFFFFFF)
+        volatile_write_u32(gicd + 0x0080 + i * 4, 0xFFFFFFFF)
+        i = i + 1
+    }
+    volatile_write_u32(gicd, 2)
+
+    // GICR: Wake redistributor, configure SGIs/PPIs
+    let gicr = 0x080A0000
+    let waker = volatile_read_u32(gicr + 0x0014)
+    volatile_write_u32(gicr + 0x0014, waker & 0xFFFFFFFD)
+    let mut w = 0
+    while w < 1000 {
+        let wr = volatile_read_u32(gicr + 0x0014)
+        if ((wr >> 2) & 1) == 0 { w = 1000 }
+        w = w + 1
+    }
+    volatile_write_u32(gicr + 0x10080, 0xFFFFFFFF)
+    volatile_write_u32(gicr + 0x10180, 0xFFFFFFFF)
+    volatile_write_u32(gicr + 0x10280, 0xFFFFFFFF)
+
+    // CPU interface: PMR=0xFF, enable group 1, unmask IRQs
+    gic_cpu_init(0xFF)
+    irq_enable()
+}
+
+fn gic_enable_irq(irq: i64, priority: i64) {
+    if irq < 32 {
+        let bit = 1 << irq
+        volatile_write_u32(0x080A0000 + 0x10100, bit)
+        volatile_write_u8(0x080A0000 + 0x10400 + irq, priority)
+    } else {
+        let reg_idx = irq / 32
+        let bit_idx = irq % 32
+        volatile_write_u32(0x08000000 + 0x0100 + reg_idx * 4, 1 << bit_idx)
+        volatile_write_u8(0x08000000 + 0x0400 + irq, priority)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ARM Generic Timer (CNTP — Physical Timer, PPI 30)
+// ═══════════════════════════════════════════════════════════════════
+
+// Timer IRQ count (for uptime and diagnostics)
+const TIMER_IRQ_COUNT_ADDR: i64 = 0x4700D000
+const TIMER_QUANTUM_TICKS_ADDR: i64 = 0x4700D008
+
+fn timer_init_preempt() {
+    // Cache frequency and compute 10ms quantum
+    let f = timer_freq()
+    let quantum_ticks = f / 100  // 10ms = freq/100
+    volatile_write(TIMER_QUANTUM_TICKS_ADDR, quantum_ticks)
+    volatile_write(TIMER_IRQ_COUNT_ADDR, 0)
+
+    // Set timer countdown
+    timer_set(quantum_ticks)
+
+    // Enable timer (ENABLE=1, IMASK=0) — already done by timer_set()
+
+    // Enable timer PPI (IRQ 30) in GICv3 with high priority
+    gic_enable_irq(30, 0x20)
+}
+
+fn timer_rearm() {
+    let ticks = volatile_read(TIMER_QUANTUM_TICKS_ADDR)
+    timer_set(ticks)
+
+    // Increment IRQ count
+    let c = volatile_read(TIMER_IRQ_COUNT_ADDR)
+    volatile_write(TIMER_IRQ_COUNT_ADDR, c + 1)
+}
+
+fn timer_irq_total() -> i64 {
+    volatile_read_u32(0x4700D000)
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Exception Handlers
 // ═══════════════════════════════════════════════════════════════════
 
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
 }
 
 fn fj_exception_irq() {
-    let mut irq = 0
-    asm!("mrs x0, ICC_IAR1_EL1", out("x0") irq)
-    asm!("msr ICC_EOIR1_EL1, x0", in("x0") irq)
+    let irq = gic_ack()
+
+    if irq == 30 {
+        // Timer interrupt — rearm with 10ms quantum (625000 ticks @ 62.5MHz)
+        timer_set(625000)
+    }
+
+    // EOI
+    gic_eoi(irq)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3367,8 +3469,17 @@ fn kernel_main() -> i64 {
     volatile_write(0x47007F00, 0)
     // Log: "BOOT"
     dmesg_log(66, 79, 79, 84)
+
+    // Init GICv3 interrupt controller
+    gic_init()
     // Log: "GIC "
     dmesg_log(71, 73, 67, 32)
+
+    // Init preemptive timer (10ms quantum, IRQ 30)
+    timer_init_preempt()
+    // Log: "TIMR"
+    dmesg_log(84, 73, 77, 82)
+
     // Log: "SHEL"
     dmesg_log(83, 72, 69, 76)
 

@@ -1,0 +1,96 @@
+// FajarOS — ARM Generic Timer Driver
+//
+// Uses the EL1 Physical Timer (CNTP) for preemptive scheduling.
+// Timer PPI = IRQ 30 (Secure Physical Timer) on QEMU virt.
+//
+// Timer registers:
+//   CNTFRQ_EL0  — Counter frequency (read-only, set by firmware)
+//   CNTPCT_EL0  — Physical counter (monotonic, read-only)
+//   CNTP_TVAL_EL0 — Timer value (countdown, triggers IRQ at 0)
+//   CNTP_CTL_EL0  — Control: bit0=ENABLE, bit1=IMASK, bit2=ISTATUS
+//
+// Flow: set TVAL → enable → counter decrements → hits 0 → IRQ fires → ack + reset
+
+// Timer PPI number on QEMU virt (non-secure physical timer)
+const TIMER_IRQ: i64 = 30
+
+// Scheduler quantum: 10ms
+const SCHED_QUANTUM_MS: i64 = 10
+
+// Timer state
+const TIMER_STATE_ADDR: i64 = 0x4700D000
+// [0] = frequency (cached)
+// [8] = ticks per quantum
+// [16] = total IRQ count
+// [24] = enabled flag
+
+fn timer_cache_freq() {
+    let mut f = 0
+    asm!("mrs x0, CNTFRQ_EL0", out("x0") f)
+    volatile_write(TIMER_STATE_ADDR, f)
+    // Calculate ticks per quantum: freq * SCHED_QUANTUM_MS / 1000
+    let ticks = f / 1000 * SCHED_QUANTUM_MS
+    volatile_write(TIMER_STATE_ADDR + 8, ticks)
+}
+
+fn timer_get_ticks_per_quantum() -> i64 {
+    volatile_read(TIMER_STATE_ADDR + 8)
+}
+
+fn timer_irq_count() -> i64 {
+    volatile_read(TIMER_STATE_ADDR + 16)
+}
+
+fn timer_inc_irq_count() {
+    let c = volatile_read(TIMER_STATE_ADDR + 16)
+    volatile_write(TIMER_STATE_ADDR + 16, c + 1)
+}
+
+// Set the timer to fire after `ticks` counter decrements
+fn timer_set_tval(ticks: i64) {
+    asm!("msr CNTP_TVAL_EL0, x0", in("x0") ticks)
+}
+
+// Enable the timer (ENABLE=1, IMASK=0)
+fn timer_enable() {
+    asm!("msr CNTP_CTL_EL0, x0", in("x0") 1)
+    asm!("isb")
+    volatile_write(TIMER_STATE_ADDR + 24, 1)
+}
+
+// Disable the timer
+fn timer_disable() {
+    asm!("msr CNTP_CTL_EL0, x0", in("x0") 0)
+    volatile_write(TIMER_STATE_ADDR + 24, 0)
+}
+
+// Check if timer IRQ is pending (ISTATUS bit)
+fn timer_is_pending() -> i64 {
+    let mut ctl = 0
+    asm!("mrs x0, CNTP_CTL_EL0", out("x0") ctl)
+    (ctl >> 2) & 1
+}
+
+// Initialize timer for preemptive scheduling
+fn timer_init() {
+    // Cache frequency and compute quantum
+    timer_cache_freq()
+
+    // Reset IRQ count
+    volatile_write(TIMER_STATE_ADDR + 16, 0)
+
+    // Set initial countdown
+    let ticks = timer_get_ticks_per_quantum()
+    timer_set_tval(ticks)
+
+    // Enable timer
+    timer_enable()
+}
+
+// Called from IRQ handler when timer fires
+// Rearms the timer for the next quantum
+fn timer_rearm() {
+    let ticks = timer_get_ticks_per_quantum()
+    timer_set_tval(ticks)
+    timer_inc_irq_count()
+}
