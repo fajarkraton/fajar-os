@@ -2358,10 +2358,10 @@ fn cmd_rmfat() {
 //   [32] avail ring index
 //   [40] used ring last index
 //
-// VirtQueue memory:
-//   0x48000000: Descriptor table (16 × 16 bytes)
-//   0x48001000: Available ring
-//   0x48002000: Used ring
+// VirtQueue memory (v1 legacy contiguous layout):
+//   0x48000000: Descriptor table (16 × 16 bytes = 256)
+//   0x48000100: Available ring (after descriptors)
+//   0x48001000: Used ring (page-aligned after avail)
 //   0x48003000: Request header (16 bytes)
 //   0x48004200: Status byte
 // ═══════════════════════════════════════════════════════════════════
@@ -2408,65 +2408,53 @@ fn virtio_reset(base: i64) {
     mmio_write32(base + 0x70, 3)
 }
 
-// Negotiate features (accept all device features, both words)
+// Negotiate features (v1 legacy: accept minimal set only)
 fn virtio_negotiate(base: i64) {
-    // Word 0: bits 0-31
-    mmio_write32(base + 0x14, 0)
-    let f0 = mmio_read32(base + 0x10)
-    mmio_write32(base + 0x24, 0)
-    mmio_write32(base + 0x20, f0)
-    // Word 1: bits 32-63 (includes VIRTIO_F_VERSION_1 = bit 32)
-    mmio_write32(base + 0x14, 1)
-    let f1 = mmio_read32(base + 0x10)
-    mmio_write32(base + 0x24, 1)
-    mmio_write32(base + 0x20, f1)
-    // Set FEATURES_OK
-    mmio_write32(base + 0x70, 11)
+    mmio_read32(base + 0x10)
+    // Accept no optional features — basic block I/O only
+    mmio_write32(base + 0x20, 0)
 }
 
-// Setup virtqueue 0: descriptor table + avail + used rings
+// Setup virtqueue 0 (v1 legacy: QueuePFN)
 fn virtio_setup_queue(base: i64) {
+    // Select queue 0
     mmio_write32(base + 0x30, 0)
     let qmax = mmio_read32(base + 0x34)
     let mut qsize = 16
     if qmax < 16 { qsize = qmax }
     mmio_write32(base + 0x38, qsize)
     volatile_write(0x4700D010, qsize)
-    // Zero descriptor table (256 bytes)
+    // Set alignment
+    mmio_write32(base + 0x3C, 4096)
+    // Zero descriptor table (256 bytes at 0x48000000)
     let mut i = 0
     while i < 256 { volatile_write_u8(0x48000000 + i, 0)  i = i + 1 }
-    // Zero available ring (64 bytes)
+    // Zero available ring (64 bytes at 0x48000100)
     i = 0
-    while i < 64 { volatile_write_u8(0x48001000 + i, 0)  i = i + 1 }
-    // Zero used ring (256 bytes)
+    while i < 64 { volatile_write_u8(0x48000100 + i, 0)  i = i + 1 }
+    // Zero used ring (256 bytes at 0x48001000)
     i = 0
-    while i < 256 { volatile_write_u8(0x48002000 + i, 0)  i = i + 1 }
-    // Set queue physical addresses
-    mmio_write32(base + 0x80, 0x48000000)
-    mmio_write32(base + 0x84, 0)
-    mmio_write32(base + 0x90, 0x48001000)
-    mmio_write32(base + 0x94, 0)
-    mmio_write32(base + 0xa0, 0x48002000)
-    mmio_write32(base + 0xa4, 0)
-    mmio_write32(base + 0x44, 1)
+    while i < 256 { volatile_write_u8(0x48001000 + i, 0)  i = i + 1 }
+    // Set queue PFN (physical_address / page_size)
+    mmio_write32(base + 0x40, 0x48000)
 }
 
-// Initialize virtio-blk device
+// Initialize virtio-blk device (v1 legacy: no FEATURES_OK)
 fn virtio_init() {
     let base = volatile_read(0x4700D000)
     if base != 0 {
         virtio_reset(base)
+        // Set GuestPageSize FIRST to put QEMU in v1 legacy mode
+        mmio_write32(base + 0x28, 4096)
         virtio_negotiate(base)
-        let status = mmio_read32(base + 0x70)
-        if (status & 8) != 0 {
-            virtio_setup_queue(base)
-            mmio_write32(base + 0x70, 15)
-            let cap = mmio_read32(base + 0x100)
-            volatile_write(0x4700D008, cap)
-            volatile_write(0x4700D018, 1)
-            volatile_write(0x4700D020, 0)
-            volatile_write(0x4700D028, 0)
-        }
+        virtio_setup_queue(base)
+        // DRIVER_OK = ACKNOWLEDGE(1) + DRIVER(2) + DRIVER_OK(4) = 7
+        mmio_write32(base + 0x70, 7)
+        let cap = mmio_read32(base + 0x100)
+        volatile_write(0x4700D008, cap)
+        volatile_write(0x4700D018, 1)
+        volatile_write(0x4700D020, 0)
+        volatile_write(0x4700D028, 0)
     }
 }
 
@@ -2501,8 +2489,8 @@ fn virtio_do_io(sector: i64, buf: i64, bytes: i64, is_write: i64) {
     vq_set_desc(1, buf, bytes, d1_flags, 2)
     // Descriptor 2: status (device writes)
     vq_set_desc(2, status_addr, 1, 2, 0)
-    // Add to available ring
-    let avail = 0x48001000
+    // Add to available ring (v1: at 0x48000100)
+    let avail = 0x48000100
     let idx = volatile_read(0x4700D020)
     let qsize = volatile_read(0x4700D010)
     fat_write_u16(avail + 4 + (idx & (qsize - 1)) * 2, 0)
@@ -2511,8 +2499,8 @@ fn virtio_do_io(sector: i64, buf: i64, bytes: i64, is_write: i64) {
     volatile_write(0x4700D020, idx + 1)
     // Notify device (MMIO register)
     mmio_write32(base + 0x50, 0)
-    // Poll used ring for completion
-    let used = 0x48002000
+    // Poll used ring for completion (v1: at 0x48001000)
+    let used = 0x48001000
     let last = volatile_read(0x4700D028)
     let mut done = 0
     let mut spin = 0
