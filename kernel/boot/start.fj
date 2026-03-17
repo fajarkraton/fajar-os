@@ -272,6 +272,12 @@ fn cmd_help() {
     help_line(99, 97, 116, 102, 97, 116)
     // "  df    "
     help_line(100, 102, 32, 32, 32, 32)
+    // "  write." (writefat)
+    help_line(119, 114, 105, 116, 101, 46)
+    // "  rmfat "
+    help_line(114, 109, 102, 97, 116, 32)
+    // "  sync  "
+    help_line(115, 121, 110, 99, 32, 32)
 }
 
 fn cmd_ps() {
@@ -1787,23 +1793,28 @@ fn cmd_is_mount() -> i64 {
 }
 
 fn cmd_mount() {
+    // Probe virtio-blk if not already initialized
+    if volatile_read(0x4700D018) == 0 {
+        virtio_probe()
+        if volatile_read(0x4700D000) != 0 {
+            virtio_init()
+            if volatile_read(0x4700D018) == 1 {
+                virtio_load_disk()
+            }
+        }
+    }
     fat_init_disk()
     if fat_mounted() == 1 {
         let entries = volatile_read(0x4700C028)
         putc(70) putc(65) putc(84) putc(32)
         print_num(entries)
-        putc(32)
-        putc(101)
-        putc(110)
-        putc(116)
-        putc(114)
-        putc(105)
-        putc(101)
-        putc(115)
-        nl()
+        putc(32) putc(101) putc(110) putc(116) putc(114) putc(105) putc(101) putc(115) nl()
+        if volatile_read(0x4700D018) == 1 {
+            // "virtio"
+            putc(118) putc(105) putc(114) putc(116) putc(105) putc(111) nl()
+        }
     } else {
-        putc(78) putc(111) putc(32) putc(100) putc(105) putc(115) putc(107)
-        nl()
+        putc(78) putc(111) putc(32) putc(100) putc(105) putc(115) putc(107) nl()
     }
 }
 
@@ -2018,6 +2029,549 @@ fn cmd_df() {
         putc(49)
         putc(54)
         nl()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FAT Write Support (Milestone 1 — S19)
+// ═══════════════════════════════════════════════════════════════════
+
+// Write 16-bit little-endian
+fn fat_write_u16(addr: i64, val: i64) {
+    volatile_write_u8(addr, val & 0xFF)
+    volatile_write_u8(addr + 1, (val >> 8) & 0xFF)
+}
+
+// Write 32-bit little-endian
+fn fat_write_u32(addr: i64, val: i64) {
+    volatile_write_u8(addr, val & 0xFF)
+    volatile_write_u8(addr + 1, (val >> 8) & 0xFF)
+    volatile_write_u8(addr + 2, (val >> 16) & 0xFF)
+    volatile_write_u8(addr + 3, (val >> 24) & 0xFF)
+}
+
+// FAT table base address (after reserved sectors)
+fn fat_table_addr() -> i64 {
+    let base = volatile_read(0x4700C000)
+    let reserved = volatile_read(0x4700C018)
+    let bps = volatile_read(0x4700C008)
+    base + reserved * bps
+}
+
+// Read FAT16 entry for cluster
+fn fat_read_entry(cluster: i64) -> i64 {
+    fat_read_u16(fat_table_addr() + cluster * 2)
+}
+
+// Write FAT16 entry for cluster
+fn fat_write_entry(cluster: i64, val: i64) {
+    fat_write_u16(fat_table_addr() + cluster * 2, val)
+}
+
+// Total sectors from BPB
+fn fat_total_sectors() -> i64 {
+    let base = volatile_read(0x4700C000)
+    let ts16 = fat_read_u16(base + 19)
+    let mut total = ts16
+    if ts16 == 0 {
+        total = fat_read_u32(base + 32)
+    }
+    total
+}
+
+// Max valid cluster number
+fn fat_max_cluster() -> i64 {
+    let bps = volatile_read(0x4700C008)
+    let spc = volatile_read(0x4700C010)
+    let data_start = volatile_read(0x4700C040)
+    let total = fat_total_sectors()
+    let data_sectors = total - data_start / bps
+    data_sectors / spc + 2
+}
+
+// Find first free cluster (FAT entry == 0x0000)
+// Returns cluster number, or 0 if disk full
+fn fat_find_free_cluster() -> i64 {
+    let max = fat_max_cluster()
+    let mut c = 2
+    let mut result = 0
+    while c < max {
+        if result == 0 {
+            if fat_read_entry(c) == 0 {
+                result = c
+                c = max
+            }
+        }
+        c = c + 1
+    }
+    result
+}
+
+// Find first free root dir entry (first byte 0x00 or 0xE5)
+// Returns absolute address, or 0 if full
+fn fat_find_free_dir_entry() -> i64 {
+    let base = volatile_read(0x4700C000)
+    let root = volatile_read(0x4700C038)
+    let entries = volatile_read(0x4700C028)
+    let mut i = 0
+    let mut result = 0
+    while i < entries {
+        if result == 0 {
+            let entry = base + root + i * 32
+            let first = volatile_read_u8(entry)
+            if first == 0 {
+                result = entry
+                i = entries
+            } else {
+                if first == 0xE5 {
+                    result = entry
+                    i = entries
+                }
+            }
+        }
+        i = i + 1
+    }
+    result
+}
+
+// Convert char to uppercase
+fn fat_to_upper(c: i64) -> i64 {
+    let mut r = c
+    if c >= 97 {
+        if c <= 122 {
+            r = c - 32
+        }
+    }
+    r
+}
+
+// Fill dir entry bytes [0..11) with 8.3 name from cmd buffer [start..end)
+fn fat_fill_name(entry: i64, start: i64, end: i64) {
+    let mut j = 0
+    while j < 11 {
+        volatile_write_u8(entry + j, 32)
+        j = j + 1
+    }
+    let mut ci = start
+    let mut fi = 0
+    while ci < end {
+        let c = cmd_char(ci)
+        if c == 46 {
+            fi = 8
+        } else {
+            if fi < 11 {
+                volatile_write_u8(entry + fi, fat_to_upper(c))
+                fi = fi + 1
+            }
+        }
+        ci = ci + 1
+    }
+}
+
+// Match dir entry name against cmd buffer [start..end)
+// Uses scratch area at 0x4700C100 for comparison
+fn fat_name_match(entry: i64, start: i64, end: i64) -> i64 {
+    let scratch = 0x4700C100
+    fat_fill_name(scratch, start, end)
+    let mut ok = 1
+    let mut j = 0
+    while j < 11 {
+        if ok == 1 {
+            if volatile_read_u8(entry + j) != volatile_read_u8(scratch + j) {
+                ok = 0
+            }
+        }
+        j = j + 1
+    }
+    ok
+}
+
+// Write cmd buffer data [start..len) to cluster, return bytes written
+fn fat_write_data(cluster: i64, start: i64) -> i64 {
+    let base = volatile_read(0x4700C000)
+    let data_area = volatile_read(0x4700C040)
+    let bps = volatile_read(0x4700C008)
+    let spc = volatile_read(0x4700C010)
+    let addr = base + data_area + (cluster - 2) * spc * bps
+    let max = spc * bps
+    let len = cmd_len()
+    let mut size = 0
+    let mut i = start
+    while i < len {
+        if size < max {
+            volatile_write_u8(addr + size, cmd_char(i))
+            size = size + 1
+        }
+        i = i + 1
+    }
+    size
+}
+
+// Free cluster chain in FAT table
+fn fat_free_chain(cluster: i64) {
+    let mut c = cluster
+    let mut count = 0
+    while c >= 2 {
+        if count > 1000 {
+            c = 0
+        } else {
+            let next = fat_read_entry(c)
+            fat_write_entry(c, 0)
+            if next >= 0xFFF8 {
+                c = 0
+            } else {
+                c = next
+            }
+            count = count + 1
+        }
+    }
+}
+
+// Delete dir entry + free its cluster chain
+fn fat_delete_entry(entry: i64) {
+    let cluster = fat_read_u16(entry + 26)
+    if cluster >= 2 {
+        fat_free_chain(cluster)
+    }
+    volatile_write_u8(entry, 0xE5)
+}
+
+// Create file: dir entry + write data + update FAT
+fn fat_create_file(name_start: i64, name_end: i64, data_idx: i64) {
+    let entry = fat_find_free_dir_entry()
+    if entry == 0 {
+        // "Full"
+        putc(70) putc(117) putc(108) putc(108) nl()
+    } else {
+        let cluster = fat_find_free_cluster()
+        if cluster == 0 {
+            putc(70) putc(117) putc(108) putc(108) nl()
+        } else {
+            fat_fill_name(entry, name_start, name_end)
+            volatile_write_u8(entry + 11, 0x20)
+            let mut j = 12
+            while j < 26 {
+                volatile_write_u8(entry + j, 0)
+                j = j + 1
+            }
+            fat_write_u16(entry + 26, cluster)
+            let size = fat_write_data(cluster, data_idx)
+            fat_write_u32(entry + 28, size)
+            fat_write_entry(cluster, 0xFFFF)
+            // "OK"
+            putc(79) putc(75) nl()
+        }
+    }
+}
+
+// "writefat <name> <data>" — create file on FAT disk
+fn cmd_is_writefat() -> i64 {
+    let len = cmd_len()
+    if len < 10 { 0 }
+    else { if cmd_char(0) == 119 { if cmd_char(1) == 114 { if cmd_char(2) == 105 { if cmd_char(3) == 116 { if cmd_char(4) == 101 { if cmd_char(5) == 102 { if cmd_char(6) == 97 { if cmd_char(7) == 116 { if cmd_char(8) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_writefat() {
+    if fat_mounted() == 0 {
+        putc(78) putc(111) putc(116) putc(32) putc(109) putc(111) putc(117) putc(110) putc(116)
+        nl()
+    } else {
+        let len = cmd_len()
+        // Find end of filename (first space after index 9)
+        let mut name_end = 0
+        let mut i = 9
+        while i < len {
+            if name_end == 0 {
+                if cmd_char(i) == 32 {
+                    name_end = i
+                    i = len
+                }
+            }
+            i = i + 1
+        }
+        if name_end == 0 {
+            name_end = len
+        }
+        let mut data_start = len
+        if name_end < len {
+            data_start = name_end + 1
+        }
+        fat_create_file(9, name_end, data_start)
+    }
+}
+
+// "rmfat <name>" — delete file from FAT disk
+fn cmd_is_rmfat() -> i64 {
+    let len = cmd_len()
+    if len < 7 { 0 }
+    else { if cmd_char(0) == 114 { if cmd_char(1) == 109 { if cmd_char(2) == 102 { if cmd_char(3) == 97 { if cmd_char(4) == 116 { if cmd_char(5) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_rmfat() {
+    if fat_mounted() == 0 {
+        putc(78) putc(111) putc(116) putc(32) putc(109) putc(111) putc(117) putc(110) putc(116)
+        nl()
+    } else {
+        let base = volatile_read(0x4700C000)
+        let root = volatile_read(0x4700C038)
+        let entries = volatile_read(0x4700C028)
+        let name_start = 6
+        let name_end = cmd_len()
+        let mut found = 0
+        let mut i = 0
+        while i < entries {
+            if found == 0 {
+                let entry = base + root + i * 32
+                let first = volatile_read_u8(entry)
+                if first != 0 {
+                    if first != 0xE5 {
+                        let attr = volatile_read_u8(entry + 11)
+                        if attr != 0x0F {
+                            if fat_name_match(entry, name_start, name_end) == 1 {
+                                found = 1
+                                fat_delete_entry(entry)
+                                putc(79) putc(75) nl()
+                            }
+                        }
+                    }
+                }
+            }
+            i = i + 1
+        }
+        if found == 0 {
+            putc(63) nl()
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// VirtIO Block Device Driver (Milestone 1 — S16/S17)
+//
+// QEMU virt machine: virtio MMIO at 0x0a000000-0x0a003e00
+// Usage: qemu -drive file=fat.img,format=raw,if=virtio
+//
+// Driver state at 0x4700D000:
+//   [0]  MMIO base (0 = not found)
+//   [8]  capacity (sectors)
+//   [16] queue size
+//   [24] initialized (1 = ready)
+//   [32] avail ring index
+//   [40] used ring last index
+//
+// VirtQueue memory:
+//   0x48000000: Descriptor table (16 × 16 bytes)
+//   0x48001000: Available ring
+//   0x48002000: Used ring
+//   0x48003000: Request header (16 bytes)
+//   0x48004200: Status byte
+// ═══════════════════════════════════════════════════════════════════
+
+// MMIO 32-bit read (volatile_read is 64-bit, mask to 32)
+fn mmio_read32(addr: i64) -> i64 {
+    volatile_read(addr) & 0xFFFFFFFF
+}
+
+// MMIO 32-bit write (volatile_write is 64-bit, QEMU splits to 2x32)
+fn mmio_write32(addr: i64, val: i64) {
+    volatile_write(addr, val)
+}
+
+// Scan virtio MMIO for block device (DeviceID == 2)
+// QEMU maps devices at highest slots first, so scan high-to-low
+fn virtio_probe() {
+    let mut addr = 0x0a003e00
+    let mut found = 0
+    while addr >= 0x0a000000 {
+        if found == 0 {
+            let magic = mmio_read32(addr)
+            if magic == 0x74726976 {
+                let devid = mmio_read32(addr + 8)
+                if devid == 2 {
+                    found = addr
+                    addr = 0
+                }
+            }
+        }
+        if addr > 0 {
+            addr = addr - 0x200
+        } else {
+            addr = 0
+        }
+    }
+    volatile_write(0x4700D000, found)
+}
+
+// Reset + set ACKNOWLEDGE + DRIVER
+fn virtio_reset(base: i64) {
+    mmio_write32(base + 0x70, 0)
+    mmio_write32(base + 0x70, 1)
+    mmio_write32(base + 0x70, 3)
+}
+
+// Negotiate features (accept all device features, both words)
+fn virtio_negotiate(base: i64) {
+    // Word 0: bits 0-31
+    mmio_write32(base + 0x14, 0)
+    let f0 = mmio_read32(base + 0x10)
+    mmio_write32(base + 0x24, 0)
+    mmio_write32(base + 0x20, f0)
+    // Word 1: bits 32-63 (includes VIRTIO_F_VERSION_1 = bit 32)
+    mmio_write32(base + 0x14, 1)
+    let f1 = mmio_read32(base + 0x10)
+    mmio_write32(base + 0x24, 1)
+    mmio_write32(base + 0x20, f1)
+    // Set FEATURES_OK
+    mmio_write32(base + 0x70, 11)
+}
+
+// Setup virtqueue 0: descriptor table + avail + used rings
+fn virtio_setup_queue(base: i64) {
+    mmio_write32(base + 0x30, 0)
+    let qmax = mmio_read32(base + 0x34)
+    let mut qsize = 16
+    if qmax < 16 { qsize = qmax }
+    mmio_write32(base + 0x38, qsize)
+    volatile_write(0x4700D010, qsize)
+    // Zero descriptor table (256 bytes)
+    let mut i = 0
+    while i < 256 { volatile_write_u8(0x48000000 + i, 0)  i = i + 1 }
+    // Zero available ring (64 bytes)
+    i = 0
+    while i < 64 { volatile_write_u8(0x48001000 + i, 0)  i = i + 1 }
+    // Zero used ring (256 bytes)
+    i = 0
+    while i < 256 { volatile_write_u8(0x48002000 + i, 0)  i = i + 1 }
+    // Set queue physical addresses
+    mmio_write32(base + 0x80, 0x48000000)
+    mmio_write32(base + 0x84, 0)
+    mmio_write32(base + 0x90, 0x48001000)
+    mmio_write32(base + 0x94, 0)
+    mmio_write32(base + 0xa0, 0x48002000)
+    mmio_write32(base + 0xa4, 0)
+    mmio_write32(base + 0x44, 1)
+}
+
+// Initialize virtio-blk device
+fn virtio_init() {
+    let base = volatile_read(0x4700D000)
+    if base != 0 {
+        virtio_reset(base)
+        virtio_negotiate(base)
+        let status = mmio_read32(base + 0x70)
+        if (status & 8) != 0 {
+            virtio_setup_queue(base)
+            mmio_write32(base + 0x70, 15)
+            let cap = mmio_read32(base + 0x100)
+            volatile_write(0x4700D008, cap)
+            volatile_write(0x4700D018, 1)
+            volatile_write(0x4700D020, 0)
+            volatile_write(0x4700D028, 0)
+        }
+    }
+}
+
+// Set virtqueue descriptor entry
+// Layout: [0-7] addr, [8-11] len, [12-13] flags, [14-15] next
+fn vq_set_desc(idx: i64, addr: i64, len: i64, flags: i64, next: i64) {
+    let d = 0x48000000 + idx * 16
+    fat_write_u32(d, addr & 0xFFFFFFFF)
+    fat_write_u32(d + 4, 0)
+    fat_write_u32(d + 8, len)
+    fat_write_u16(d + 12, flags)
+    fat_write_u16(d + 14, next)
+}
+
+// Perform virtio-blk I/O (read or write)
+// is_write: 0=read, 1=write; bytes: total data size
+fn virtio_do_io(sector: i64, buf: i64, bytes: i64, is_write: i64) {
+    let base = volatile_read(0x4700D000)
+    let hdr = 0x48003000
+    let status_addr = 0x48004200
+    // Fill request header
+    fat_write_u32(hdr, is_write)
+    fat_write_u32(hdr + 4, 0)
+    fat_write_u32(hdr + 8, sector & 0xFFFFFFFF)
+    fat_write_u32(hdr + 12, 0)
+    volatile_write_u8(status_addr, 0xFF)
+    // Descriptor 0: header (device reads)
+    vq_set_desc(0, hdr, 16, 1, 1)
+    // Descriptor 1: data buffer
+    let mut d1_flags = 3
+    if is_write == 1 { d1_flags = 1 }
+    vq_set_desc(1, buf, bytes, d1_flags, 2)
+    // Descriptor 2: status (device writes)
+    vq_set_desc(2, status_addr, 1, 2, 0)
+    // Add to available ring
+    let avail = 0x48001000
+    let idx = volatile_read(0x4700D020)
+    let qsize = volatile_read(0x4700D010)
+    fat_write_u16(avail + 4 + (idx & (qsize - 1)) * 2, 0)
+    asm!("dmb ish")
+    fat_write_u16(avail + 2, (idx + 1) & 0xFFFF)
+    volatile_write(0x4700D020, idx + 1)
+    // Notify device (MMIO register)
+    mmio_write32(base + 0x50, 0)
+    // Poll used ring for completion
+    let used = 0x48002000
+    let last = volatile_read(0x4700D028)
+    let mut done = 0
+    let mut spin = 0
+    while done == 0 {
+        asm!("dmb ish")
+        let used_idx = fat_read_u16(used + 2)
+        if used_idx != (last & 0xFFFF) {
+            done = 1
+        }
+        spin = spin + 1
+        if spin > 10000000 { done = 1 }
+    }
+    volatile_write(0x4700D028, last + 1)
+}
+
+// Load entire disk from virtio-blk into memory at 0x44000000
+// Reads in 64KB chunks (128 sectors) for reliability
+fn virtio_load_disk() {
+    let cap = volatile_read(0x4700D008)
+    let dest = 0x44000000
+    let chunk = 128
+    let mut s = 0
+    while s < cap {
+        let mut n = chunk
+        if s + n > cap { n = cap - s }
+        virtio_do_io(s, dest + s * 512, n * 512, 0)
+        s = s + n
+    }
+}
+
+// Write back entire disk from memory to virtio-blk
+fn virtio_save_disk() {
+    let cap = volatile_read(0x4700D008)
+    let src = 0x44000000
+    let chunk = 128
+    let mut s = 0
+    while s < cap {
+        let mut n = chunk
+        if s + n > cap { n = cap - s }
+        virtio_do_io(s, src + s * 512, n * 512, 1)
+        s = s + n
+    }
+}
+
+// "sync" — write back FAT changes to virtio-blk disk
+fn cmd_is_sync() -> i64 {
+    let len = cmd_len()
+    if len != 4 { 0 }
+    else { if cmd_char(0) == 115 { if cmd_char(1) == 121 { if cmd_char(2) == 110 { if cmd_char(3) == 99 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_sync() {
+    if volatile_read(0x4700D018) == 1 {
+        virtio_save_disk()
+        // "OK"
+        putc(79) putc(75) nl()
+    } else {
+        // "No disk"
+        putc(78) putc(111) putc(32) putc(100) putc(105) putc(115) putc(107) nl()
     }
 }
 
@@ -2780,6 +3334,18 @@ fn execute_cmd() {
         }
         if cmd_is_df() == 1 {
             cmd_df()
+            handled = 1
+        }
+        if cmd_is_writefat() == 1 {
+            cmd_writefat()
+            handled = 1
+        }
+        if cmd_is_rmfat() == 1 {
+            cmd_rmfat()
+            handled = 1
+        }
+        if cmd_is_sync() == 1 {
+            cmd_sync()
             handled = 1
         }
         if handled == 0 {

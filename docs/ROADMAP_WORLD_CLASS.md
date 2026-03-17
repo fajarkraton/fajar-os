@@ -20,14 +20,15 @@
 ✅ Timer API (sleep_ms, 1ms accuracy)
 ✅ Preemptive scheduler (3-process round-robin)
 ✅ IPC (mailbox send/recv/reply)
-✅ Interactive shell (57 commands)
+✅ Interactive shell (63 commands)
 ✅ RAM filesystem (ls, touch, rm, cp, mkdir, cat, stat)
+✅ FAT16 filesystem (mount, lsfat, catfat, df, writefat, rmfat)
 ✅ Self-test suite (5/5 pass)
 ✅ Kernel log (dmesg)
 ✅ Environment variables
 ```
 
-**Lines of Fajar Lang kernel code: ~2,500**
+**Lines of Fajar Lang kernel code: ~3,200**
 **Target hardware: Radxa Dragon Q6A (Qualcomm QCS6490)**
 
 ---
@@ -97,10 +98,11 @@
 |--------|-------|-------------|
 | S16 | 10 | PCIe enumeration, NVMe admin queue, identify controller/namespace |
 | S17 | 10 | NVMe I/O queues, block read/write, DMA buffers |
-| S18 | 10 | FAT32 filesystem: read directories, read files, parse BPB |
-| S19 | 10 | FAT32 write: create files, write data, update FAT table |
+| S18 | 10 | FAT16 filesystem: read directories, read files, parse BPB ✅ |
+| S19 | 10 | FAT16 write: create files, write data, update FAT table ✅ |
 
-**Gate:** `ls /nvme/`, `cat /nvme/hello.txt`, `echo "test" > /nvme/test.txt`
+**Gate:** `mount`, `lsfat`, `catfat hello.txt` ✅, `writefat new.txt data` ✅, `rmfat new.txt` ✅
+**Remaining:** S16-S17 (PCIe/NVMe block driver for real hardware)
 
 ### Milestone 2: TCP/IP Networking (v3.2)
 **Goal:** FajarOS responds to ping, serves HTTP
