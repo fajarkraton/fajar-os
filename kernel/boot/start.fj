@@ -2567,6 +2567,38 @@ fn cmd_sync() {
     }
 }
 
+// "demo" — start preemptive multitasking demo (2 processes)
+fn cmd_is_demo() -> i64 {
+    let len = cmd_len()
+    if len != 4 { 0 }
+    else { if cmd_char(0) == 100 { if cmd_char(1) == 101 { if cmd_char(2) == 109 { if cmd_char(3) == 111 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_demo() {
+    // "Starting preemptive multitasking demo..."
+    putc(83) putc(116) putc(97) putc(114) putc(116) putc(105) putc(110) putc(103)
+    putc(32) putc(100) putc(101) putc(109) putc(111) putc(46) putc(46) putc(46) nl()
+
+    // Set PID 0 (kernel) as RUNNING
+    let pid0_base = PROC_TABLE_BASE
+    sched_write_proc(pid0_base, 0)
+    sched_write_proc(pid0_base + 8, STATE_RUNNING)
+    sched_write_proc(CUR_PID, 0)
+
+    // Create PID 1 (process_a) and PID 2 (process_b)
+    let entry_a = fn_addr(process_a)
+    let entry_b = fn_addr(process_b)
+    create_process(1, entry_a)
+    create_process(2, entry_b)
+
+    // "PID 1: A  PID 2: B"
+    putc(80) putc(73) putc(68) putc(49) putc(58) putc(65)
+    putc(32) putc(32)
+    putc(80) putc(73) putc(68) putc(50) putc(58) putc(66) nl()
+    // "Output: ABABAB... (Ctrl+C to stop)"
+    putc(79) putc(117) putc(116) putc(112) putc(117) putc(116) putc(58) putc(32) nl()
+}
+
 fn cmd_is_ls() -> i64 {
     let len = cmd_len()
     if len != 2 { 0 }
@@ -3340,6 +3372,10 @@ fn execute_cmd() {
             cmd_sync()
             handled = 1
         }
+        if cmd_is_demo() == 1 {
+            cmd_demo()
+            handled = 1
+        }
         if handled == 0 {
             putc(63)
             nl()
@@ -3448,14 +3484,127 @@ const SAVED_SP_ADDR: i64 = 0x47001018
 // Timer IRQ counter (write via volatile to simple address)
 const IRQ_COUNT_ADDR: i64 = 0x47001020
 
+// ═══════════════════════════════════════════════════════════════════
+// Process Entry Points (for context switch demo)
+// ═══════════════════════════════════════════════════════════════════
+
+// Process A: prints "A" every time it gets scheduled
+fn process_a() -> i64 {
+    let mut i = 0
+    while i < 1000000 {
+        putc(65)
+        // Busy-wait a bit (so output is readable)
+        let mut j = 0
+        while j < 50000 {
+            j = j + 1
+        }
+        i = i + 1
+    }
+    0
+}
+
+// Process B: prints "B" every time it gets scheduled
+fn process_b() -> i64 {
+    let mut i = 0
+    while i < 1000000 {
+        putc(66)
+        let mut j = 0
+        while j < 50000 {
+            j = j + 1
+        }
+        i = i + 1
+    }
+    0
+}
+
+// Process table constants
+const PROC_TABLE_BASE: i64 = 0x47000000
+const PROC_SLOT_SIZE: i64 = 256
+const STATE_FREE: i64 = 0
+const STATE_READY: i64 = 1
+const STATE_RUNNING: i64 = 2
+const CUR_PID: i64 = 0x47001000
+
+// Create a process: set up stack frame for context switch
+fn create_process(pid: i64, entry: i64) {
+    // Process table entry
+    let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
+    sched_write_proc(base, pid)           // [0] = PID
+    sched_write_proc(base + 8, STATE_READY) // [8] = State
+
+    // Stack: 0x48000000 + pid * 0x10000, 64KB each, grows down
+    let stack_top = 0x48000000 + (pid + 1) * 0x10000 - 16
+
+    // Set up initial context frame (256 bytes)
+    // Zero all register slots
+    let frame_sp = stack_top - 256
+    let mut off = 0
+    while off < 240 {
+        sched_write_proc(frame_sp + off, 0)
+        off = off + 8
+    }
+    // [frame_sp + 240] = x30 (link register) = 0
+    sched_write_proc(frame_sp + 240, 0)
+    // [frame_sp + 248] = ELR_EL1 = entry point
+    sched_write_proc(frame_sp + 248, entry)
+
+    // Save initial SP in process table
+    sched_write_proc(base + 16, frame_sp) // [16] = SP
+    sched_write_proc(base + 24, entry)    // [24] = PC (for display)
+}
+
+// Simple round-robin scheduler (called from IRQ handler)
+fn sched_switch() {
+    let cur = sched_read_proc(CUR_PID)
+    let saved_sp = sched_get_saved_sp()
+
+    // Save current process SP
+    let cur_base = PROC_TABLE_BASE + cur * PROC_SLOT_SIZE
+    sched_write_proc(cur_base + 16, saved_sp)
+
+    // Mark current as READY (if still RUNNING)
+    let cur_state = sched_read_proc(cur_base + 8)
+    if cur_state == STATE_RUNNING {
+        sched_write_proc(cur_base + 8, STATE_READY)
+    }
+
+    // Find next READY process (round-robin)
+    let mut next = cur + 1
+    let mut found = 0
+    let mut checked = 0
+    while checked < 3 {
+        if next > 2 { next = 0 }
+        let next_base = PROC_TABLE_BASE + next * PROC_SLOT_SIZE
+        let next_state = sched_read_proc(next_base + 8)
+        if next_state == STATE_READY {
+            found = 1
+            checked = 3
+        } else {
+            next = next + 1
+            checked = checked + 1
+        }
+    }
+
+    // If found a different process, switch to it
+    if found == 1 {
+        let next_base = PROC_TABLE_BASE + next * PROC_SLOT_SIZE
+        sched_write_proc(next_base + 8, STATE_RUNNING)
+        sched_write_proc(CUR_PID, next)
+        let next_sp = sched_read_proc(next_base + 16)
+        sched_set_next_sp(next_sp)
+    }
+}
+
 fn fj_exception_irq() {
     let irq = gic_ack()
 
     if irq == 30 {
         timer_set(625000)
-        // Increment IRQ counter: read → add 1 → write
+        // Increment IRQ counter
         let count = sched_read_proc(0x47001020)
         sched_write_proc(0x47001020, count + 1)
+        // Run scheduler for context switch
+        sched_switch()
     }
 
     // EOI
@@ -3515,9 +3664,10 @@ fn kernel_main() -> i64 {
     nl()
     nl()
 
-    // Process table init
-    volatile_write(0x47000008, 2)
-    volatile_write(0x47001000, 0)
+    // Process table init: PID 0 = kernel (RUNNING)
+    sched_write_proc(PROC_TABLE_BASE, 0)
+    sched_write_proc(PROC_TABLE_BASE + 8, STATE_RUNNING)
+    sched_write_proc(CUR_PID, 0)
 
     // Shell loop: read chars, execute on Enter
     prompt()
