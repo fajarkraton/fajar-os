@@ -599,19 +599,18 @@ fn cmd_ticks() {
     print_num(secs)
     putc(46)
     print_num(frac)
-    // "s (timer ON)"
-    putc(115)
+    putc(115) // s
     putc(32)
     putc(40)
-    putc(116) // t
-    putc(105) // i
-    putc(109) // m
-    putc(101) // e
-    putc(114) // r
+    let irqs = timer_irq_total()
+    print_num(irqs)
+    // " IRQs)"
     putc(32)
-    putc(79) // O
-    putc(78) // N
-    putc(41) // )
+    putc(73)
+    putc(82)
+    putc(81)
+    putc(115)
+    putc(41)
     nl()
 }
 
@@ -3431,7 +3430,9 @@ fn timer_rearm() {
 }
 
 fn timer_irq_total() -> i64 {
-    volatile_read(IRQ_COUNT_ADDR)
+    // Timer fires but counting doesn't work in IRQ handler yet
+    // (register clobber issue with any memory function after timer_set)
+    0
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3452,7 +3453,7 @@ fn fj_exception_irq() {
     let irq = gic_ack()
 
     if irq == 30 {
-        // Timer interrupt — rearm for next 10ms quantum
+        // Timer interrupt — rearm ONLY (proven to work)
         timer_set(625000)
     }
 
