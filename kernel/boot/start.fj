@@ -2366,14 +2366,13 @@ fn cmd_rmfat() {
 //   0x48004200: Status byte
 // ═══════════════════════════════════════════════════════════════════
 
-// MMIO 32-bit read (volatile_read is 64-bit, mask to 32)
+// MMIO 32-bit access via volatile_read_u32 / volatile_write_u32 builtins
 fn mmio_read32(addr: i64) -> i64 {
-    volatile_read(addr) & 0xFFFFFFFF
+    volatile_read_u32(addr)
 }
 
-// MMIO 32-bit write (volatile_write is 64-bit, QEMU splits to 2x32)
 fn mmio_write32(addr: i64, val: i64) {
-    volatile_write(addr, val)
+    volatile_write_u32(addr, val)
 }
 
 // Scan virtio MMIO for block device (DeviceID == 2)

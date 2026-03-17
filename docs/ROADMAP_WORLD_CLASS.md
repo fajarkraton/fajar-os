@@ -28,7 +28,7 @@
 ✅ Environment variables
 ```
 
-**Lines of Fajar Lang kernel code: ~3,200**
+**Lines of Fajar Lang kernel code: ~3,450**
 **Target hardware: Radxa Dragon Q6A (Qualcomm QCS6490)**
 
 ---
@@ -96,13 +96,13 @@
 
 | Sprint | Tasks | Description |
 |--------|-------|-------------|
-| S16 | 10 | PCIe enumeration, NVMe admin queue, identify controller/namespace |
-| S17 | 10 | NVMe I/O queues, block read/write, DMA buffers |
+| S16 | 10 | VirtIO-blk driver: MMIO probe, v1 legacy init, feature negotiate ✅ |
+| S17 | 10 | VirtIO I/O: descriptor chains, avail/used rings, sector read/write, sync ✅ |
 | S18 | 10 | FAT16 filesystem: read directories, read files, parse BPB ✅ |
 | S19 | 10 | FAT16 write: create files, write data, update FAT table ✅ |
 
-**Gate:** `mount`, `lsfat`, `catfat hello.txt` ✅, `writefat new.txt data` ✅, `rmfat new.txt` ✅
-**Remaining:** S16-S17 (PCIe/NVMe block driver for real hardware)
+**Gate:** `mount` ✅ (virtio), `lsfat` ✅, `catfat` ✅, `writefat` ✅, `rmfat` ✅, `sync` ✅ (persistent!)
+**ALL COMPLETE** — data persists to disk image across reboots
 
 ### Milestone 2: TCP/IP Networking (v3.2)
 **Goal:** FajarOS responds to ping, serves HTTP
