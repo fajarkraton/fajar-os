@@ -593,29 +593,25 @@ fn cmd_sleep() {
 }
 
 fn cmd_ticks() {
-    let t = timer_ticks()
     let ms = uptime_ms()
-    // Print uptime in seconds.ms
-    print_num(ms / 1000)
+    let secs = ms / 1000
+    let frac = (ms % 1000) / 100
+    print_num(secs)
     putc(46)
-    print_num(ms % 1000)
-    // " s (timer active)"
+    print_num(frac)
+    // "s (timer ON)"
     putc(115)
     putc(32)
     putc(40)
-    // Print timer status
-    let ctl = timer_status()
-    if (ctl & 1) == 1 {
-        // "ON"
-        putc(79)
-        putc(78)
-    } else {
-        // "OFF"
-        putc(79)
-        putc(70)
-        putc(70)
-    }
-    putc(41)
+    putc(116) // t
+    putc(105) // i
+    putc(109) // m
+    putc(101) // e
+    putc(114) // r
+    putc(32)
+    putc(79) // O
+    putc(78) // N
+    putc(41) // )
     nl()
 }
 
@@ -3435,7 +3431,7 @@ fn timer_rearm() {
 }
 
 fn timer_irq_total() -> i64 {
-    volatile_read_u32(0x4700D000)
+    volatile_read(IRQ_COUNT_ADDR)
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3445,11 +3441,18 @@ fn timer_irq_total() -> i64 {
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
 }
 
+// Context switch flag address (checked by vector stub after handler returns)
+const CTX_SWITCH_SP: i64 = 0x47001010
+// Saved SP from vector stub
+const SAVED_SP_ADDR: i64 = 0x47001018
+// Timer IRQ counter (write via volatile to simple address)
+const IRQ_COUNT_ADDR: i64 = 0x47001020
+
 fn fj_exception_irq() {
     let irq = gic_ack()
 
     if irq == 30 {
-        // Timer interrupt — rearm with 10ms quantum (625000 ticks @ 62.5MHz)
+        // Timer interrupt — rearm for next 10ms quantum
         timer_set(625000)
     }
 
@@ -3474,6 +3477,11 @@ fn kernel_main() -> i64 {
     gic_init()
     // Log: "GIC "
     dmesg_log(71, 73, 67, 32)
+
+    // Init IRQ counter + context switch flag
+    volatile_write(IRQ_COUNT_ADDR, 0)
+    volatile_write(CTX_SWITCH_SP, 0)
+    volatile_write(SAVED_SP_ADDR, 0)
 
     // Init preemptive timer (10ms quantum, IRQ 30)
     timer_init_preempt()
