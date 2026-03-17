@@ -276,34 +276,48 @@ fn cmd_help() {
 }
 
 fn cmd_ps() {
-    // "PID STATE"
-    putc(80)
-    putc(73)
-    putc(68)
-    putc(32)
-    putc(83)
-    putc(84)
-    nl()
+    // "PID  STATE  NAME"
+    putc(80) putc(73) putc(68) putc(32) putc(32)
+    putc(83) putc(84) putc(65) putc(84) putc(69) putc(32) putc(32)
+    putc(78) putc(65) putc(77) putc(69) nl()
     let mut p = 0
-    while p < 3 {
-        let st = volatile_read(0x47000000 + p * 256 + 8)
-        putc(48 + p)
-        putc(32)
-        putc(32)
-        putc(32)
-        if st == 0 {
-            putc(70)
+    while p < 8 {
+        let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
+        let st = sched_read_proc(base + 8)
+        if st != STATE_FREE {
+            // PID
+            putc(48 + p)
+            putc(32) putc(32) putc(32) putc(32)
+            // State
+            if st == STATE_READY {
+                putc(82) putc(68) putc(89) // RDY
+            }
+            if st == STATE_RUNNING {
+                putc(82) putc(85) putc(78) // RUN
+            }
+            if st == 3 {
+                putc(66) putc(76) putc(75) // BLK
+            }
+            if st == 4 {
+                putc(68) putc(69) putc(68) // DED
+            }
+            putc(32) putc(32) putc(32) putc(32)
+            // Name
+            if p == 0 {
+                putc(107) putc(101) putc(114) putc(110) putc(101) putc(108) // kernel
+            }
+            if p == 1 {
+                putc(112) putc(114) putc(111) putc(99) putc(95) putc(97) // proc_a
+            }
+            if p == 2 {
+                putc(112) putc(114) putc(111) putc(99) putc(95) putc(98) // proc_b
+            }
+            if p > 2 {
+                putc(112) putc(114) putc(111) putc(99) // proc
+                putc(48 + p)
+            }
+            nl()
         }
-        if st == 1 {
-            putc(82)
-        }
-        if st == 2 {
-            putc(42)
-        }
-        if st == 3 {
-            putc(68)
-        }
-        nl()
         p = p + 1
     }
 }
@@ -3376,6 +3390,10 @@ fn execute_cmd() {
             cmd_demo()
             handled = 1
         }
+        if cmd_is_kill() == 1 {
+            cmd_kill()
+            handled = 1
+        }
         if handled == 0 {
             putc(63)
             nl()
@@ -3488,32 +3506,41 @@ const IRQ_COUNT_ADDR: i64 = 0x47001020
 // Process Entry Points (for context switch demo)
 // ═══════════════════════════════════════════════════════════════════
 
-// Process A: prints "A" every time it gets scheduled
+// Process A: prints "A" 200 times then exits
 fn process_a() -> i64 {
     let mut i = 0
-    while i < 1000000 {
+    while i < 200 {
         putc(65)
-        // Busy-wait a bit (so output is readable)
         let mut j = 0
-        while j < 50000 {
+        while j < 30000 {
             j = j + 1
         }
         i = i + 1
     }
+    // Mark self as TERMINATED
+    let my_pid = sched_read_proc(CUR_PID)
+    let my_base = PROC_TABLE_BASE + my_pid * PROC_SLOT_SIZE
+    sched_write_proc(my_base + 8, 4)
+    // Yield — scheduler will pick another process
+    asm!("wfi")
     0
 }
 
-// Process B: prints "B" every time it gets scheduled
+// Process B: prints "B" 200 times then exits
 fn process_b() -> i64 {
     let mut i = 0
-    while i < 1000000 {
+    while i < 200 {
         putc(66)
         let mut j = 0
-        while j < 50000 {
+        while j < 30000 {
             j = j + 1
         }
         i = i + 1
     }
+    let my_pid = sched_read_proc(CUR_PID)
+    let my_base = PROC_TABLE_BASE + my_pid * PROC_SLOT_SIZE
+    sched_write_proc(my_base + 8, 4)
+    asm!("wfi")
     0
 }
 
