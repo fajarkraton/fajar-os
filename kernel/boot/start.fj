@@ -276,49 +276,22 @@ fn cmd_help() {
 }
 
 fn cmd_ps() {
-    // "PID  STATE  NAME"
-    putc(80) putc(73) putc(68) putc(32) putc(32)
-    putc(83) putc(84) putc(65) putc(84) putc(69) putc(32) putc(32)
-    putc(78) putc(65) putc(77) putc(69) nl()
+    // Header
+    putc(80) putc(73) putc(68) putc(32)
+    putc(83) putc(84) putc(65) putc(84) putc(69) nl()
+    // "--- -----"
+    putc(45) putc(45) putc(45) putc(32)
+    putc(45) putc(45) putc(45) putc(45) putc(45) nl()
     let mut p = 0
     while p < 8 {
         let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
-        let st = sched_read_proc(base + 8)
+        let st = volatile_read(base + 8)
         if st != STATE_FREE {
-            // PID
-            putc(48 + p)
-            putc(32) putc(32) putc(32) putc(32)
-            // State
-            if st == STATE_READY {
-                putc(82) putc(68) putc(89) // RDY
-            }
-            if st == STATE_RUNNING {
-                putc(82) putc(85) putc(78) // RUN
-            }
-            if st == 3 {
-                putc(66) putc(76) putc(75) // BLK
-            }
-            if st == 4 {
-                putc(68) putc(69) putc(68) // DED
-            }
-            putc(32) putc(32) putc(32) putc(32)
-            // Name
-            if p == 0 {
-                putc(107) putc(101) putc(114) putc(110) putc(101) putc(108) // kernel
-            }
-            if p == 1 {
-                putc(112) putc(114) putc(111) putc(99) putc(95) putc(97) // proc_a
-            }
-            if p == 2 {
-                putc(112) putc(114) putc(111) putc(99) putc(95) putc(98) // proc_b
-            }
-            if p == 3 {
-                putc(112) putc(114) putc(111) putc(99) putc(95) putc(99) // proc_c
-            }
-            if p > 3 {
-                putc(112) putc(114) putc(111) putc(99) // proc
-                putc(48 + p)
-            }
+            putc(32) putc(48 + p) putc(32) putc(32)
+            if st == STATE_READY { putc(82) putc(69) putc(65) putc(68) putc(89) }
+            if st == STATE_RUNNING { putc(42) putc(82) putc(85) putc(78) putc(42) }
+            if st == 3 { putc(66) putc(76) putc(79) putc(67) putc(75) }
+            if st == 4 { putc(32) putc(68) putc(69) putc(65) putc(68) }
             nl()
         }
         p = p + 1
