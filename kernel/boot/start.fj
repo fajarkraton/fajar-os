@@ -2414,11 +2414,50 @@ fn cmd_ipc() {
 
     // Create sender (PID 4) and receiver (PID 5)
     create_process(4, fn_addr(process_sender))
+    volatile_write(PROC_TABLE_BASE + 4 * PROC_SLOT_SIZE + 88, 83) // 'S'
     create_process(5, fn_addr(process_receiver))
+    volatile_write(PROC_TABLE_BASE + 5 * PROC_SLOT_SIZE + 88, 82) // 'R'
 
-    // "4:send 5:recv"
-    putc(52) putc(58) putc(115) putc(101) putc(110) putc(100) putc(32)
-    putc(53) putc(58) putc(114) putc(101) putc(99) putc(118) nl()
+    println("4:send 5:recv")
+}
+
+fn cmd_is_ipcstat() -> i64 {
+    let len = cmd_len()
+    if len != 7 { 0 }
+    else { if cmd_char(0) == 105 { if cmd_char(1) == 112 { if cmd_char(2) == 99 { if cmd_char(3) == 115 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_ipcstat() {
+    println("PID  QUEUE SENT")
+    println("---  ----- ----")
+    let mut p = 0
+    while p < MAX_PROCS {
+        let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
+        let st = volatile_read(base + 8)
+        if st != STATE_FREE {
+            let mbox = ipc_mailbox_addr(p)
+            let count = volatile_read(mbox)
+            let total = volatile_read(mbox + 24)
+            if count > 0 {
+                if p < 10 { print(" ") }
+                print_num(p)
+                print("    ")
+                print_num(count)
+                print("     ")
+                print_num(total)
+                nl()
+            } else {
+                if total > 0 {
+                    if p < 10 { print(" ") }
+                    print_num(p)
+                    print("    0     ")
+                    print_num(total)
+                    nl()
+                }
+            }
+        }
+        p = p + 1
+    }
 }
 
 // "wait N" — wait for process N to exit
@@ -3420,6 +3459,10 @@ fn execute_cmd() {
             cmd_pmap()
             handled = 1
         }
+        if cmd_is_ipcstat() == 1 {
+            cmd_ipcstat()
+            handled = 1
+        }
         if cmd_is_memstat() == 1 {
             cmd_memstat()
             handled = 1
@@ -3690,17 +3733,23 @@ fn find_free_pid() -> i64 {
 //   [32+i*16] msg[i]: sender(8) + value(8), i=0..3
 
 const IPC_MAILBOX_BASE: i64 = 0x47002000
-const IPC_MAILBOX_SIZE: i64 = 128
-const IPC_QUEUE_CAP: i64 = 4
+const IPC_MAILBOX_SIZE: i64 = 256
+const IPC_QUEUE_CAP: i64 = 8
+// Mailbox layout (256 bytes per PID):
+//   [0]  = count (messages in queue)
+//   [8]  = head (read pointer)
+//   [16] = tail (write pointer)
+//   [24] = total_sent (cumulative)
+//   [32..255] = 8 messages × 16 bytes each: [sender_pid, value]
 
 fn ipc_mailbox_addr(pid: i64) -> i64 {
     IPC_MAILBOX_BASE + pid * IPC_MAILBOX_SIZE
 }
 
 fn ipc_send(dest_pid: i64, value: i64) -> i64 {
-    if dest_pid < 0 { 0 }
+    if dest_pid < 0 { -1 }
     else {
-        if dest_pid > 7 { 0 }
+        if dest_pid > 14 { -1 }
         else {
             let mbox = ipc_mailbox_addr(dest_pid)
             let count = sched_read_proc(mbox)
@@ -3716,6 +3765,9 @@ fn ipc_send(dest_pid: i64, value: i64) -> i64 {
                 if new_tail >= IPC_QUEUE_CAP { new_tail = 0 }
                 sched_write_proc(mbox + 16, new_tail)
                 sched_write_proc(mbox, count + 1)
+                // Increment total sent counter
+                let total = sched_read_proc(mbox + 24)
+                sched_write_proc(mbox + 24, total + 1)
                 // Wake if BLOCKED
                 let dest_base = PROC_TABLE_BASE + dest_pid * PROC_SLOT_SIZE
                 let dest_state = sched_read_proc(dest_base + 8)
@@ -4277,13 +4329,14 @@ fn kernel_main() -> i64 {
     volatile_write(CTX_SWITCH_SP, 0)
     volatile_write(SAVED_SP_ADDR, 0)
 
-    // Init IPC mailbox queues (all zeroed)
+    // Init IPC mailbox queues (count=0, head=0, tail=0, total=0)
     let mut mb_init = 0
     while mb_init < MAX_PROCS {
         let mba = ipc_mailbox_addr(mb_init)
-        volatile_write(mba, 0)
-        volatile_write(mba + 8, 0)
-        volatile_write(mba + 16, 0)
+        volatile_write(mba, 0)       // count
+        volatile_write(mba + 8, 0)   // head
+        volatile_write(mba + 16, 0)  // tail
+        volatile_write(mba + 24, 0)  // total_sent
         mb_init = mb_init + 1
     }
 
