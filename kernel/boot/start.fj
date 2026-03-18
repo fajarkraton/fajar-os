@@ -158,22 +158,18 @@ fn cmd_help() {
 }
 
 fn cmd_ps() {
-    // Header
-    putc(80) putc(73) putc(68) putc(32)
-    putc(83) putc(84) putc(65) putc(84) putc(69) nl()
-    // "--- -----"
-    putc(45) putc(45) putc(45) putc(32)
-    putc(45) putc(45) putc(45) putc(45) putc(45) nl()
+    println("PID STATE")
+    println("--- -----")
     let mut p = 0
     while p < 8 {
         let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
         let st = volatile_read(base + 8)
         if st != STATE_FREE {
             putc(32) putc(48 + p) putc(32) putc(32)
-            if st == STATE_READY { putc(82) putc(69) putc(65) putc(68) putc(89) }
-            if st == STATE_RUNNING { putc(42) putc(82) putc(85) putc(78) putc(42) }
-            if st == 3 { putc(66) putc(76) putc(79) putc(67) putc(75) }
-            if st == 4 { putc(32) putc(68) putc(69) putc(65) putc(68) }
+            if st == STATE_READY { print("READY") }
+            if st == STATE_RUNNING { print("*RUN*") }
+            if st == 3 { print("BLOCK") }
+            if st == 4 { print(" DEAD") }
             nl()
         }
         p = p + 1
@@ -497,23 +493,11 @@ fn cmd_is_version() -> i64 {
 }
 
 fn cmd_version() {
-    // "FajarOS v3.0 Surya"
-    putc(70) putc(97) putc(106) putc(97) putc(114) putc(79) putc(83) putc(32)
-    putc(118) putc(51) putc(46) putc(48) putc(32)
-    putc(83) putc(117) putc(114) putc(121) putc(97)
-    nl()
-    // "Kernel: Fajar Lang (aarch64)"
-    putc(75) putc(101) putc(114) putc(110) putc(101) putc(108) putc(58) putc(32)
-    putc(70) putc(97) putc(106) putc(97) putc(114) putc(32)
-    putc(76) putc(97) putc(110) putc(103)
-    nl()
-    // "Arch: aarch64 EL1"
-    putc(65) putc(114) putc(99) putc(104) putc(58) putc(32)
-    putc(97) putc(97) putc(114) putc(99) putc(104) putc(54) putc(52) putc(32)
-    putc(69) putc(76)
-    let mut el = 0
-    asm!("mrs x0, CurrentEL", out("x0") el)
-    putc(48 + ((el >> 2) & 3))
+    println("FajarOS v3.0 Surya")
+    println("Kernel: Fajar Lang")
+    print("Arch: aarch64 EL")
+    let el = read_el()
+    putc(48 + el)
     nl()
 }
 
@@ -524,8 +508,7 @@ fn cmd_is_halt() -> i64 {
 }
 
 fn cmd_halt() {
-    putc(72) putc(97) putc(108) putc(116) putc(105) putc(110) putc(103) putc(46) putc(46) putc(46)
-    nl()
+    println("Halting...")
     asm!("wfi")
 }
 
@@ -536,8 +519,7 @@ fn cmd_is_whoami() -> i64 {
 }
 
 fn cmd_whoami() {
-    // "root"
-    putc(114) putc(111) putc(111) putc(116) nl()
+    println("root")
 }
 
 fn cmd_is_date() -> i64 {
@@ -2488,16 +2470,16 @@ fn cmd_wait() {
             let state = volatile_read(base + 8)
             if state == 4 {
                 // Already terminated
-                putc(80) putc(73) putc(68) putc(32) putc(48 + pid)
-                putc(32) putc(100) putc(111) putc(110) putc(101) nl() // " done"
+                print("PID ") putc(48 + pid)
+                print(" done") nl() // " done"
             } else {
                 if state == STATE_FREE {
-                    putc(78) putc(111) putc(32) putc(80) putc(73) putc(68) nl()
+                    print("No PID") nl()
                 } else {
                     // Block kernel (PID 0) waiting for target
                     // We can't actually block PID 0 (it runs the shell)
                     // Instead, busy-wait with WFI until target terminates
-                    putc(119) putc(97) putc(105) putc(116) putc(46) putc(46) putc(46) // "wait..."
+                    print("wait...") // "wait..."
                     let mut done = 0
                     while done == 0 {
                         asm!("wfi")
@@ -2506,8 +2488,8 @@ fn cmd_wait() {
                         if ts == STATE_FREE { done = 1 }
                     }
                     nl()
-                    putc(80) putc(73) putc(68) putc(32) putc(48 + pid)
-                    putc(32) putc(100) putc(111) putc(110) putc(101) nl() // " done"
+                    print("PID ") putc(48 + pid)
+                    print(" done") nl() // " done"
                 }
             }
         }
@@ -2534,7 +2516,7 @@ fn cmd_spawn() {
             nl()
         } else {
             // "No free PID"
-            putc(78) putc(111) putc(32) putc(80) putc(73) putc(68) nl()
+            print("No PID") nl()
         }
     } else {
         // "Unknown: X"
@@ -2996,13 +2978,7 @@ fn cmd_bench() {
 // ═══════════════════════════════════════════════════════════════════
 
 fn prompt() {
-    // "fjsh> "
-    putc(102)
-    putc(106)
-    putc(115)
-    putc(104)
-    putc(62)
-    putc(32)
+    print("fjsh> ")
 }
 
 fn cmd_is_clear() -> i64 {
