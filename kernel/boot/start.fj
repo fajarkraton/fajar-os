@@ -3587,21 +3587,20 @@ fn process_b() -> i64 {
     0
 }
 
-// Process C: prints "C" directly (testing scheduler with 3+ processes)
+// Process C: uses syscalls (SVC) instead of direct UART access
 fn process_c() -> i64 {
     let mut i = 0
     while i < 200 {
-        putc(67)
+        // SYS_WRITE(1) with arg1=67 ('C')
+        svc(1, 67, 0)
         let mut j = 0
         while j < 30000 {
             j = j + 1
         }
         i = i + 1
     }
-    let my_pid = sched_read_proc(CUR_PID)
-    let my_base = PROC_TABLE_BASE + my_pid * PROC_SLOT_SIZE
-    sched_write_proc(my_base + 8, 4)
-    asm!("wfi")
+    // SYS_EXIT(0)
+    svc(0, 0, 0)
     0
 }
 
