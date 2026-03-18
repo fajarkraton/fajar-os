@@ -3951,6 +3951,26 @@ const PRIO_NORMAL: i64 = 1
 const PRIO_HIGH: i64 = 2
 const PRIO_REALTIME: i64 = 3
 
+// Create per-process page table with shared kernel mapping + unique stack
+fn create_proc_page_table(pid: i64) -> i64 {
+    // Allocate new L0 page table
+    let l0 = mmu_pt_alloc()
+
+    // Read kernel's L0 entry 0 (points to L1 with MMIO + kernel)
+    let kernel_l0 = volatile_read(0x4700F108)
+    let kernel_l0_entry0 = volatile_read(kernel_l0)
+
+    // Share kernel's L1 table (MMIO + kernel code/data)
+    // L0[0] points to same L1 as kernel — shared mapping
+    volatile_write(l0, kernel_l0_entry0)
+
+    // Per-process stack is already identity-mapped in kernel L2
+    // at 0x48000000 + pid * 0x10000 (within the 0x40000000-0x4FFFFFFF range)
+    // No extra mapping needed since kernel L2 covers this region
+
+    l0
+}
+
 // Create a process: set up stack frame for context switch
 fn create_process(pid: i64, entry: i64) {
     // Process table entry
@@ -3983,9 +4003,19 @@ fn create_process(pid: i64, entry: i64) {
     sched_write_proc(base + 16, frame_sp) // [16] = SP
     sched_write_proc(base + 24, entry)    // [24] = PC (for display)
 
-    // Share kernel page table (all processes use same TTBR0 for now)
-    let kernel_l0 = volatile_read(0x4700F108)
-    sched_write_proc(base + 64, kernel_l0)     // [64] = TTBR0 (shared)
+    // Create per-process page table (or share kernel's for PID 0/15)
+    if pid == 0 {
+        let kernel_l0 = volatile_read(0x4700F108)
+        sched_write_proc(base + 64, kernel_l0)
+    } else {
+        if pid == 15 {
+            let kernel_l0 = volatile_read(0x4700F108)
+            sched_write_proc(base + 64, kernel_l0)
+        } else {
+            let proc_l0 = create_proc_page_table(pid)
+            sched_write_proc(base + 64, proc_l0)
+        }
+    }
 
     // Default priority: NORMAL
     sched_write_proc(base + 96, PRIO_NORMAL)   // [96] = priority
@@ -4035,6 +4065,12 @@ fn sched_switch() {
             sched_write_proc(CUR_PID, best_pid)
             let next_sp = sched_read_proc(next_base + 16)
             sched_set_next_sp(next_sp)
+
+            // TTBR0 switch: load next process's page table
+            let next_ttbr0 = sched_read_proc(next_base + 64)
+            if next_ttbr0 > 0 {
+                switch_ttbr0(next_ttbr0)
+            }
         }
     }
 }
