@@ -3463,6 +3463,10 @@ fn execute_cmd() {
             cmd_ipcstat()
             handled = 1
         }
+        if cmd_is_svclist() == 1 {
+            cmd_svclist()
+            handled = 1
+        }
         if cmd_is_memstat() == 1 {
             cmd_memstat()
             handled = 1
@@ -3662,6 +3666,8 @@ const SYS_SPAWN: i64 = 6
 const SYS_KILL: i64 = 7
 const SYS_WAIT: i64 = 8
 const SYS_READ: i64 = 9
+const SYS_SVC_REGISTER: i64 = 10
+const SYS_SVC_LOOKUP: i64 = 11
 
 // ═══════════════════════════════════════════════════════════════════
 // Process Function Table (for spawn command)
@@ -3732,6 +3738,82 @@ fn find_free_pid() -> i64 {
 //   [16]  tail (write index)
 //   [32+i*16] msg[i]: sender(8) + value(8), i=0..3
 
+// ═══════════════════════════════════════════════════════════════════
+// Service Registry (microkernel foundation)
+// ═══════════════════════════════════════════════════════════════════
+// 16 service slots at 0x4700A000, 32 bytes each:
+//   [0]  = name_char (single char identifier)
+//   [8]  = owner_pid (PID that provides this service)
+//   [16] = port (service-specific identifier)
+//   [24] = flags (1=active, 0=inactive)
+const SVC_REGISTRY_BASE: i64 = 0x4700A000
+const SVC_REGISTRY_SIZE: i64 = 32
+const SVC_REGISTRY_MAX: i64 = 16
+
+fn svc_register(name_char: i64, port: i64) -> i64 {
+    let pid = sched_read_proc(CUR_PID)
+    // Find free slot
+    let mut i = 0
+    while i < SVC_REGISTRY_MAX {
+        let addr = SVC_REGISTRY_BASE + i * SVC_REGISTRY_SIZE
+        let flags = volatile_read(addr + 24)
+        if flags == 0 {
+            volatile_write(addr, name_char)
+            volatile_write(addr + 8, pid)
+            volatile_write(addr + 16, port)
+            volatile_write(addr + 24, 1)
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn svc_lookup(name_char: i64) -> i64 {
+    let mut i = 0
+    while i < SVC_REGISTRY_MAX {
+        let addr = SVC_REGISTRY_BASE + i * SVC_REGISTRY_SIZE
+        let flags = volatile_read(addr + 24)
+        if flags == 1 {
+            let n = volatile_read(addr)
+            if n == name_char {
+                return volatile_read(addr + 8)  // return owner PID
+            }
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn cmd_is_svclist() -> i64 {
+    let len = cmd_len()
+    if len != 7 { 0 }
+    else { if cmd_char(0) == 115 { if cmd_char(1) == 118 { if cmd_char(2) == 99 { if cmd_char(3) == 108 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_svclist() {
+    println("SVC  PID  PORT")
+    println("---  ---  ----")
+    let mut i = 0
+    while i < SVC_REGISTRY_MAX {
+        let addr = SVC_REGISTRY_BASE + i * SVC_REGISTRY_SIZE
+        let flags = volatile_read(addr + 24)
+        if flags == 1 {
+            print(" ")
+            putc(volatile_read(addr))
+            print("    ")
+            print_num(volatile_read(addr + 8))
+            print("    ")
+            print_num(volatile_read(addr + 16))
+            nl()
+        }
+        i = i + 1
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// IPC Mailbox Queues
+// ═══════════════════════════════════════════════════════════════════
 const IPC_MAILBOX_BASE: i64 = 0x47002000
 const IPC_MAILBOX_SIZE: i64 = 256
 const IPC_QUEUE_CAP: i64 = 8
@@ -3909,6 +3991,18 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
             } else {
                 syscall_set_return(0)
             }
+        }
+
+        if syscall_num == SYS_SVC_REGISTER {
+            // arg1 = name_char, arg2 = port
+            let result = svc_register(arg1, arg2)
+            syscall_set_return(result)
+        }
+
+        if syscall_num == SYS_SVC_LOOKUP {
+            // arg1 = name_char → returns owner PID
+            let result = svc_lookup(arg1)
+            syscall_set_return(result)
         }
     }
 
@@ -4342,6 +4436,21 @@ fn kernel_main() -> i64 {
 
     // Init process function table (for spawn command)
     func_table_init()
+
+    // Register kernel services
+    // 'U' = UART service (PID 0), 'T' = Timer service, 'M' = Memory service
+    volatile_write(SVC_REGISTRY_BASE + 0 * SVC_REGISTRY_SIZE, 85)  // 'U'
+    volatile_write(SVC_REGISTRY_BASE + 0 * SVC_REGISTRY_SIZE + 8, 0)
+    volatile_write(SVC_REGISTRY_BASE + 0 * SVC_REGISTRY_SIZE + 16, 1)
+    volatile_write(SVC_REGISTRY_BASE + 0 * SVC_REGISTRY_SIZE + 24, 1)
+    volatile_write(SVC_REGISTRY_BASE + 1 * SVC_REGISTRY_SIZE, 84)  // 'T'
+    volatile_write(SVC_REGISTRY_BASE + 1 * SVC_REGISTRY_SIZE + 8, 0)
+    volatile_write(SVC_REGISTRY_BASE + 1 * SVC_REGISTRY_SIZE + 16, 2)
+    volatile_write(SVC_REGISTRY_BASE + 1 * SVC_REGISTRY_SIZE + 24, 1)
+    volatile_write(SVC_REGISTRY_BASE + 2 * SVC_REGISTRY_SIZE, 77)  // 'M'
+    volatile_write(SVC_REGISTRY_BASE + 2 * SVC_REGISTRY_SIZE + 8, 0)
+    volatile_write(SVC_REGISTRY_BASE + 2 * SVC_REGISTRY_SIZE + 16, 3)
+    volatile_write(SVC_REGISTRY_BASE + 2 * SVC_REGISTRY_SIZE + 24, 1)
 
     // Init preemptive timer (10ms quantum, IRQ 30)
     timer_init_preempt()
