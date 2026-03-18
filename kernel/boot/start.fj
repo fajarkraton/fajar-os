@@ -3471,6 +3471,14 @@ fn execute_cmd() {
             cmd_memstat()
             handled = 1
         }
+        if cmd_is_signal() == 1 {
+            cmd_signal()
+            handled = 1
+        }
+        if cmd_is_pipe() == 1 {
+            cmd_pipe()
+            handled = 1
+        }
         if handled == 0 {
             println("?")
         }
@@ -3668,6 +3676,20 @@ const SYS_WAIT: i64 = 8
 const SYS_READ: i64 = 9
 const SYS_SVC_REGISTER: i64 = 10
 const SYS_SVC_LOOKUP: i64 = 11
+const SYS_SIGNAL: i64 = 12
+const SYS_KILL_SIG: i64 = 13
+const SYS_PIPE: i64 = 14
+const SYS_PIPE_WRITE: i64 = 15
+const SYS_PIPE_READ: i64 = 16
+
+// Signal numbers
+const SIGTERM: i64 = 1
+const SIGKILL: i64 = 9
+const SIGCHLD: i64 = 17
+
+// Process table signal fields:
+//   [104] = pending_signal (0 = none)
+//   [112] = signal_handler_addr (0 = default)
 
 // ═══════════════════════════════════════════════════════════════════
 // Process Function Table (for spawn command)
@@ -3805,6 +3827,164 @@ fn cmd_svclist() {
             print_num(volatile_read(addr + 8))
             print("    ")
             print_num(volatile_read(addr + 16))
+            nl()
+        }
+        i = i + 1
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Signal Delivery
+// ═══════════════════════════════════════════════════════════════════
+
+fn signal_send(target_pid: i64, signum: i64) -> i64 {
+    if target_pid < 0 { return -1 }
+    if target_pid >= MAX_PROCS { return -1 }
+    let base = PROC_TABLE_BASE + target_pid * PROC_SLOT_SIZE
+    let st = volatile_read(base + 8)
+    if st == STATE_FREE { return -1 }
+    if st == STATE_TERMINATED { return -1 }
+
+    if signum == SIGKILL {
+        // SIGKILL: immediate termination, no handler
+        volatile_write(base + 8, STATE_TERMINATED)
+        return 0
+    }
+
+    if signum == SIGTERM {
+        // SIGTERM: check for handler, else terminate
+        let handler = volatile_read(base + 112)
+        if handler > 0 {
+            // Set pending signal (handler called on next schedule)
+            volatile_write(base + 104, signum)
+        } else {
+            // Default: terminate
+            volatile_write(base + 8, STATE_TERMINATED)
+        }
+        return 0
+    }
+
+    // Other signals: set pending
+    volatile_write(base + 104, signum)
+    0
+}
+
+fn cmd_is_signal() -> i64 {
+    let len = cmd_len()
+    if len < 9 { 0 }
+    else { if cmd_char(0) == 115 { if cmd_char(1) == 105 { if cmd_char(2) == 103 { if cmd_char(5) == 108 { if cmd_char(6) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_signal() {
+    // "signal <pid> <sig>" — send signal to process
+    let pid = cmd_char(7) - 48
+    let sig = parse_num_from(9)
+    let result = signal_send(pid, sig)
+    if result == 0 {
+        print("Signal ")
+        print_num(sig)
+        print(" -> PID ")
+        print_num(pid)
+        nl()
+    } else {
+        println("Failed")
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Pipes (4KB circular buffer)
+// ═══════════════════════════════════════════════════════════════════
+// Pipe table at 0x4700B000, 8 pipes × 4136 bytes each:
+//   [0]  = active (1=open, 0=closed)
+//   [8]  = read_pid (PID that reads)
+//   [16] = write_pid (PID that writes)
+//   [24] = head (read offset)
+//   [32] = tail (write offset)
+//   [40..4135] = 4096-byte circular data buffer
+const PIPE_TABLE_BASE: i64 = 0x4700B000
+const PIPE_SIZE: i64 = 4136
+const PIPE_MAX: i64 = 8
+const PIPE_BUF_SIZE: i64 = 4096
+
+fn pipe_create() -> i64 {
+    let mut i = 0
+    while i < PIPE_MAX {
+        let addr = PIPE_TABLE_BASE + i * PIPE_SIZE
+        let active = volatile_read(addr)
+        if active == 0 {
+            let pid = volatile_read(CUR_PID)
+            volatile_write(addr, 1)       // active
+            volatile_write(addr + 8, pid)  // read_pid
+            volatile_write(addr + 16, pid) // write_pid (same initially)
+            volatile_write(addr + 24, 0)   // head
+            volatile_write(addr + 32, 0)   // tail
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn pipe_write(pipe_id: i64, value: i64) -> i64 {
+    if pipe_id < 0 { return -1 }
+    if pipe_id >= PIPE_MAX { return -1 }
+    let addr = PIPE_TABLE_BASE + pipe_id * PIPE_SIZE
+    if volatile_read(addr) == 0 { return -1 }
+    let tail = volatile_read(addr + 32)
+    let buf_addr = addr + 40 + (tail & (PIPE_BUF_SIZE - 1))
+    volatile_write_u8(buf_addr, value)
+    volatile_write(addr + 32, tail + 1)
+    0
+}
+
+fn pipe_read(pipe_id: i64) -> i64 {
+    if pipe_id < 0 { return -1 }
+    if pipe_id >= PIPE_MAX { return -1 }
+    let addr = PIPE_TABLE_BASE + pipe_id * PIPE_SIZE
+    if volatile_read(addr) == 0 { return -1 }
+    let head = volatile_read(addr + 24)
+    let tail = volatile_read(addr + 32)
+    if head == tail { return -1 }  // empty
+    let buf_addr = addr + 40 + (head & (PIPE_BUF_SIZE - 1))
+    let value = volatile_read_u8(buf_addr)
+    volatile_write(addr + 24, head + 1)
+    value
+}
+
+fn pipe_close(pipe_id: i64) {
+    if pipe_id >= 0 {
+        if pipe_id < PIPE_MAX {
+            let addr = PIPE_TABLE_BASE + pipe_id * PIPE_SIZE
+            volatile_write(addr, 0)
+        }
+    }
+}
+
+fn cmd_is_pipe() -> i64 {
+    let len = cmd_len()
+    if len != 4 { 0 }
+    else { if cmd_char(0) == 112 { if cmd_char(1) == 105 { if cmd_char(2) == 112 { if cmd_char(3) == 101 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_pipe() {
+    // Show open pipes
+    println("PIPE R_PID W_PID HEAD TAIL")
+    println("---- ----- ----- ---- ----")
+    let mut i = 0
+    while i < PIPE_MAX {
+        let addr = PIPE_TABLE_BASE + i * PIPE_SIZE
+        let active = volatile_read(addr)
+        if active == 1 {
+            print("  ")
+            print_num(i)
+            print("    ")
+            print_num(volatile_read(addr + 8))
+            print("     ")
+            print_num(volatile_read(addr + 16))
+            print("    ")
+            print_num(volatile_read(addr + 24))
+            print("    ")
+            print_num(volatile_read(addr + 32))
             nl()
         }
         i = i + 1
@@ -4002,6 +4182,38 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
         if syscall_num == SYS_SVC_LOOKUP {
             // arg1 = name_char → returns owner PID
             let result = svc_lookup(arg1)
+            syscall_set_return(result)
+        }
+
+        if syscall_num == SYS_SIGNAL {
+            // arg1 = handler address (0 = default)
+            let my_pid = sched_read_proc(CUR_PID)
+            let my_base = PROC_TABLE_BASE + my_pid * PROC_SLOT_SIZE
+            sched_write_proc(my_base + 112, arg1)
+            syscall_set_return(0)
+        }
+
+        if syscall_num == SYS_KILL_SIG {
+            // arg1 = target PID, arg2 = signal number
+            let result = signal_send(arg1, arg2)
+            syscall_set_return(result)
+        }
+
+        if syscall_num == SYS_PIPE {
+            // Create pipe → returns pipe_id
+            let result = pipe_create()
+            syscall_set_return(result)
+        }
+
+        if syscall_num == SYS_PIPE_WRITE {
+            // arg1 = pipe_id, arg2 = byte value
+            let result = pipe_write(arg1, arg2)
+            syscall_set_return(result)
+        }
+
+        if syscall_num == SYS_PIPE_READ {
+            // arg1 = pipe_id → returns byte or -1
+            let result = pipe_read(arg1)
             syscall_set_return(result)
         }
     }
