@@ -2613,6 +2613,47 @@ fn cmd_ipc() {
     putc(53) putc(58) putc(114) putc(101) putc(99) putc(118) nl()
 }
 
+// "wait N" — wait for process N to exit
+fn cmd_is_wait() -> i64 {
+    let len = cmd_len()
+    if len != 6 { 0 }
+    else { if cmd_char(0) == 119 { if cmd_char(1) == 97 { if cmd_char(2) == 105 { if cmd_char(3) == 116 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_wait() {
+    let pid = cmd_char(5) - 48
+    if pid > 0 {
+        if pid < 8 {
+            let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
+            let state = volatile_read(base + 8)
+            if state == 4 {
+                // Already terminated
+                putc(80) putc(73) putc(68) putc(32) putc(48 + pid)
+                putc(32) putc(100) putc(111) putc(110) putc(101) nl() // " done"
+            } else {
+                if state == STATE_FREE {
+                    putc(78) putc(111) putc(32) putc(80) putc(73) putc(68) nl()
+                } else {
+                    // Block kernel (PID 0) waiting for target
+                    // We can't actually block PID 0 (it runs the shell)
+                    // Instead, busy-wait with WFI until target terminates
+                    putc(119) putc(97) putc(105) putc(116) putc(46) putc(46) putc(46) // "wait..."
+                    let mut done = 0
+                    while done == 0 {
+                        asm!("wfi")
+                        let ts = volatile_read(base + 8)
+                        if ts == 4 { done = 1 }
+                        if ts == STATE_FREE { done = 1 }
+                    }
+                    nl()
+                    putc(80) putc(73) putc(68) putc(32) putc(48 + pid)
+                    putc(32) putc(100) putc(111) putc(110) putc(101) nl() // " done"
+                }
+            }
+        }
+    }
+}
+
 // "spawn X" — spawn process by name (a, b, c, s, r)
 fn cmd_is_spawn() -> i64 {
     let len = cmd_len()
@@ -3459,6 +3500,10 @@ fn execute_cmd() {
             cmd_spawn()
             handled = 1
         }
+        if cmd_is_wait() == 1 {
+            cmd_wait()
+            handled = 1
+        }
         if handled == 0 {
             putc(63)
             nl()
@@ -3758,6 +3803,16 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
             }
         }
 
+        if syscall_num == SYS_WAIT {
+            // arg1 = target PID to wait for
+            // Store wait target at proc_table[cur]+56, mark BLOCKED, yield
+            let cur_pid = sched_read_proc(CUR_PID)
+            let cur_base = PROC_TABLE_BASE + cur_pid * PROC_SLOT_SIZE
+            sched_write_proc(cur_base + 56, arg1)  // wait_target_pid
+            sched_write_proc(cur_base + 8, 3)      // BLOCKED
+            sched_switch()
+        }
+
         if syscall_num == SYS_READ {
             // Non-blocking read from UART
             let fr = volatile_read_u32(0x09000018)
@@ -3953,6 +4008,28 @@ fn fj_exception_irq() {
         // Increment IRQ counter
         let count = sched_read_proc(0x47001020)
         sched_write_proc(0x47001020, count + 1)
+
+        // Check wait-wake: if any BLOCKED process waits for a TERMINATED one, wake it
+        let mut wp = 0
+        while wp < 8 {
+            let wb = PROC_TABLE_BASE + wp * PROC_SLOT_SIZE
+            let ws = sched_read_proc(wb + 8)
+            if ws == 3 {
+                // BLOCKED — check what it's waiting for
+                let wait_target = sched_read_proc(wb + 56)
+                if wait_target > 0 {
+                    let tb = PROC_TABLE_BASE + wait_target * PROC_SLOT_SIZE
+                    let ts = sched_read_proc(tb + 8)
+                    if ts == 4 {
+                        // Target is TERMINATED → wake waiter
+                        sched_write_proc(wb + 8, STATE_READY)
+                        sched_write_proc(wb + 56, 0)
+                    }
+                }
+            }
+            wp = wp + 1
+        }
+
         // Run scheduler for context switch
         sched_switch()
     }
