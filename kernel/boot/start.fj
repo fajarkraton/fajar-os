@@ -3421,8 +3421,8 @@ fn mmu_init() {
         i = i + 1
     }
 
-    // Map kernel: 128 × 2MB blocks (256MB) as Normal WB
-    // Flags: valid(1) | block(0) | AF(1<<10) | SH_inner(3<<8) | AttrIdx1(1<<2) = 0x705
+    // Map kernel: 128 × 2MB blocks (256MB) as Normal WB + EL0 accessible
+    // AP[7:6]=01 → RW at EL0+EL1. 0x705 | 0x40 = 0x745
     let mut k = 0
     while k < 128 {
         let paddr = 0x40000000 + k * 0x200000
@@ -3890,10 +3890,7 @@ fn create_process_el0(pid: i64, entry: i64) {
     let stack_top = 0x48000000 + (pid + 1) * 0x10000 - 16
     let frame_sp = stack_top - 272
     sched_write_proc(frame_sp + 256, 0)  // SPSR = EL0t
-    // Set SP_EL0 for this process (user stack, midpoint of 64KB)
-    let user_sp = 0x48000000 + (pid + 1) * 0x10000 - 0x8000
-    // Use the compiler-generated MSR stub for SP_EL0
-    asm!("msr SP_EL0, x0", in("x0") user_sp)
+    // TODO: set SP_EL0 before first context switch to this process
 }
 
 // Process U: runs at EL0, uses SVC for everything
