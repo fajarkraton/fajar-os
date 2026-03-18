@@ -3861,14 +3861,13 @@ fn process_sender() -> i64 {
     0
 }
 
-// Process E: IPC receiver — prints received messages
+// Process E: IPC receiver — receives and prints message values
 fn process_receiver() -> i64 {
     let mut i = 0
-    while i < 5 {
-        // Receive a message (blocks if none available)
-        let msg = svc(5, 0, 0)  // SYS_IPC_RECV
-        // Print what we got
-        svc(1, 82, 0)           // SYS_WRITE 'R' to confirm recv
+    while i < 10 {
+        let msg = svc(5, 0, 0)  // SYS_IPC_RECV (blocks if empty)
+        // Print the received character value
+        svc(1, msg, 0)          // SYS_WRITE the received value
         i = i + 1
     }
     svc(0, 0, 0)
