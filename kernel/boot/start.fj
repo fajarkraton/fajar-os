@@ -2907,6 +2907,80 @@ fn cmd_reg() {
     nl()
 }
 
+fn cmd_is_pmap() -> i64 {
+    let len = cmd_len()
+    if len != 4 { 0 }
+    else { if cmd_char(0) == 112 { if cmd_char(1) == 109 { if cmd_char(2) == 97 { if cmd_char(3) == 112 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_pmap() {
+    // Show memory map for all active processes
+    println("PID  TTBR0        STACK")
+    println("---  ----------   -----")
+    let mut p = 0
+    while p < MAX_PROCS {
+        let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
+        let st = volatile_read(base + 8)
+        if st != STATE_FREE {
+            if p < 10 { print(" ") }
+            print_num(p)
+            print("   ")
+            let ttbr0 = volatile_read(base + 64)
+            print_hex32(ttbr0)
+            print("   ")
+            let stack = 0x48000000 + (p + 1) * 0x10000
+            print_hex32(stack)
+            nl()
+        }
+        p = p + 1
+    }
+}
+
+fn cmd_is_memstat() -> i64 {
+    let len = cmd_len()
+    if len != 7 { 0 }
+    else { if cmd_char(0) == 109 { if cmd_char(1) == 101 { if cmd_char(5) == 97 { if cmd_char(6) == 116 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_memstat() {
+    // Show memory statistics
+    let pt_cur = volatile_read(PT_BUMP_ADDR)
+    let pt_base = 0x46000000
+    let pt_used = (pt_cur - pt_base) / 4096
+    print("Page tables: ")
+    print_num(pt_used)
+    print(" (")
+    print_num(pt_used * 4)
+    println("KB)")
+
+    // Process count
+    let mut active = 0
+    let mut p = 0
+    while p < MAX_PROCS {
+        let st = volatile_read(PROC_TABLE_BASE + p * PROC_SLOT_SIZE + 8)
+        if st != STATE_FREE {
+            active = active + 1
+        }
+        p = p + 1
+    }
+    print("Processes: ")
+    print_num(active)
+    print("/")
+    print_num(MAX_PROCS)
+    nl()
+
+    // Stack memory: 64KB per process
+    print("Stack: ")
+    print_num(active * 64)
+    println("KB")
+
+    // Kernel regions
+    println("Kernel:  0x40000000-0x47FFFFFF (128MB)")
+    println("MMIO:    0x00000000-0x0FFFFFFF (256MB)")
+    println("Stacks:  0x48000000-0x48FFFFFF (16MB)")
+    println("PT pool: 0x46000000-0x46FFFFFF (16MB)")
+}
+
 // Sprint 36.7 preview: bench command
 fn cmd_is_bench() -> i64 {
     let len = cmd_len()
@@ -3340,6 +3414,14 @@ fn execute_cmd() {
         }
         if cmd_is_nice() == 1 {
             cmd_nice()
+            handled = 1
+        }
+        if cmd_is_pmap() == 1 {
+            cmd_pmap()
+            handled = 1
+        }
+        if cmd_is_memstat() == 1 {
+            cmd_memstat()
             handled = 1
         }
         if handled == 0 {
