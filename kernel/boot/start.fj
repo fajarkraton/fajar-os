@@ -3671,9 +3671,11 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
     // ESR.EC (bits 31:26) = 0x15 → SVC from AArch64
     let ec = (esr >> 26) & 0x3F
     if ec == 0x15 {
-        // SVC syscall — advance ELR past the SVC instruction (+4 bytes)
-        let saved_sp = sched_get_saved_sp()
-        sched_write_proc(saved_sp + 248, elr + 4)
+        // SVC syscall — advance ELR by writing directly to ELR_EL1
+        // (bypasses sched_write_proc which corrupts the exception frame)
+        asm!("mrs x0, ELR_EL1")
+        asm!("add x0, x0, #4")
+        asm!("msr ELR_EL1, x0")
 
         // Syscall number in saved x0, args in saved x1, x2
         let syscall_num = syscall_arg0()
@@ -3824,20 +3826,18 @@ fn process_t() -> i64 {
     0
 }
 
-// Process C: uses syscalls (SVC) instead of direct UART access
+// Process C: uses syscalls for I/O and exit
 fn process_c() -> i64 {
     let mut i = 0
-    while i < 200 {
-        // SYS_WRITE(1) with arg1=67 ('C')
-        svc(1, 67, 0)
+    while i < 100 {
+        svc(1, 67, 0)  // SYS_WRITE 'C'
         let mut j = 0
         while j < 30000 {
             j = j + 1
         }
         i = i + 1
     }
-    // SYS_EXIT(0)
-    svc(0, 0, 0)
+    svc(0, 0, 0)  // SYS_EXIT
     0
 }
 
