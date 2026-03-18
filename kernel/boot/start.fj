@@ -1081,13 +1081,11 @@ fn cmd_calc() {
         if op == 6 { result = a | b }
         if op == 7 { result = a ^ b }
         print_num(result)
-        putc(32)
-        putc(40)
+        print(" (")
         print_hex32(result)
-        putc(41)
-        nl()
+        println(")")
     } else {
-        putc(63) nl()
+        println("?")
     }
 }
 
@@ -1213,13 +1211,9 @@ fn cmd_loops() {
     let f = timer_freq()
     let us = (t1 - t0) / (f / 1000000)
     print_num(millions)
-    putc(77)
-    putc(58)
-    putc(32)
+    print("M: ")
     print_num(us)
-    putc(117)
-    putc(115)
-    nl()
+    println("us")
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1684,15 +1678,14 @@ fn cmd_lsfat() {
                     if attr != 0x0F {
                         // Type
                         if (attr & 0x10) != 0 {
-                            putc(100)
+                            print("d ")
                         } else {
-                            putc(45)
+                            print("- ")
                         }
-                        putc(32)
                         // Size
                         let size = fat_read_u32(entry + 28)
                         print_num(size)
-                        putc(32)
+                        print(" ")
                         // Name (8.3)
                         let mut j = 0
                         while j < 8 {
@@ -1713,7 +1706,7 @@ fn cmd_lsfat() {
                         // Extension
                         let ext0 = volatile_read_u8(entry + 8)
                         if ext0 != 32 {
-                            putc(46)
+                            print(".")
                             let mut k = 8
                             while k < 11 {
                                 let ec = volatile_read_u8(entry + k)
@@ -2388,11 +2381,9 @@ fn cmd_is_sync() -> i64 {
 fn cmd_sync() {
     if volatile_read(0x4700D018) == 1 {
         virtio_save_disk()
-        // "OK"
-        putc(79) putc(75) nl()
+        println("OK")
     } else {
-        // "No disk"
-        putc(78) putc(111) putc(32) putc(100) putc(105) putc(115) putc(107) nl()
+        println("No disk")
     }
 }
 
@@ -2734,18 +2725,16 @@ fn cmd_stat() {
             if match_ok == 1 {
                 if volatile_read_u8(base + j) == 0 {
                     found = 1
-                    if ftype == 1 { putc(70) } else { putc(68) }
-                    putc(32)
+                    if ftype == 1 { print("F ") } else { print("D ") }
                     print_num(volatile_read(base + 64))
-                    putc(66)
-                    nl()
+                    println("B")
                 }
             }
         }
         slot = slot + 1
     }
     if found == 0 {
-        putc(63) nl()
+        println("?")
     }
 }
 
@@ -2897,23 +2886,23 @@ fn cmd_is_reg() -> i64 {
 fn cmd_reg() {
     let mut el = 0
     asm!("mrs x0, CurrentEL", out("x0") el)
-    putc(69) putc(76) putc(58) putc(32) putc(48 + ((el >> 2) & 3)) nl()
+    print("EL: ") putc(48 + ((el >> 2) & 3)) nl()
 
     let mut sctlr = 0
     asm!("mrs x0, SCTLR_EL1", out("x0") sctlr)
-    putc(83) putc(67) putc(84) putc(76) putc(82) putc(58) putc(32)
+    print("SCTLR: ")
     print_hex32(sctlr)
     nl()
 
     let mut daif = 0
     asm!("mrs x0, DAIF", out("x0") daif)
-    putc(68) putc(65) putc(73) putc(70) putc(58) putc(32)
+    print("DAIF: ")
     print_hex32(daif)
     nl()
 
     let mut vbar = 0
     asm!("mrs x0, VBAR_EL1", out("x0") vbar)
-    putc(86) putc(66) putc(65) putc(82) putc(58) putc(32)
+    print("VBAR: ")
     print_hex32(vbar)
     nl()
 }
@@ -2927,7 +2916,7 @@ fn cmd_is_bench() -> i64 {
 
 fn cmd_bench() {
     // CPU: loop 1M iterations, measure time
-    putc(67) putc(80) putc(85) putc(58) putc(32)
+    print("CPU: ")
     let t0 = timer_ticks()
     let mut i = 0
     while i < 1000000 {
@@ -2937,11 +2926,10 @@ fn cmd_bench() {
     let f = timer_freq()
     let us = (t1 - t0) / (f / 1000000)
     print_num(us)
-    putc(117) putc(115) putc(47) putc(49) putc(77)
-    nl()
+    println("us/1M")
 
     // MEM: write 4KB, measure
-    putc(77) putc(69) putc(77) putc(58) putc(32)
+    print("MEM: ")
     let t2 = timer_ticks()
     let mut j = 0
     while j < 4096 {
@@ -2951,8 +2939,7 @@ fn cmd_bench() {
     let t3 = timer_ticks()
     let mem_us = (t3 - t2) / (f / 1000000)
     print_num(mem_us)
-    putc(117) putc(115) putc(47) putc(52) putc(75)
-    nl()
+    println("us/4K")
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -3843,11 +3830,7 @@ fn process_b() -> i64 {
 
 // Process T: use putc for output, svc only for exit
 fn process_t() -> i64 {
-    putc(84)  // T
-    putc(69)  // E
-    putc(83)  // S
-    putc(84)  // T
-    putc(33)  // !
+    print("TEST!")
     // Exit via SVC
     svc(0, 0, 0)   // SYS_EXIT
     0
