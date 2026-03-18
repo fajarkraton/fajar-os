@@ -3421,13 +3421,19 @@ fn mmu_init() {
         i = i + 1
     }
 
-    // Map kernel: 128 × 2MB blocks (256MB) as Normal WB + EL0 accessible
-    // AP[7:6]=01 → RW at EL0+EL1. 0x705 | 0x40 = 0x745
-    let mut k = 0
-    while k < 128 {
-        let paddr = 0x40000000 + k * 0x200000
-        volatile_write(l2_kern + k * 8, paddr | 0x705)
+    // Map kernel: entry 0 = AP=00 (EL1 only), entry 1 = AP=01 (EL0 user code)
+    // entries 2-63 = AP=00 (kernel), entries 64-127 = AP=01 (process stacks)
+    volatile_write(l2_kern + 0 * 8, 0x40000000 | 0x705)  // kernel code: EL1 only
+    volatile_write(l2_kern + 1 * 8, 0x40200000 | 0x745)  // user code: EL0 accessible
+    let mut k = 2
+    while k < 64 {
+        volatile_write(l2_kern + k * 8, (0x40000000 + k * 0x200000) | 0x705)
         k = k + 1
+    }
+    let mut ku = 64
+    while ku < 128 {
+        volatile_write(l2_kern + ku * 8, (0x40000000 + ku * 0x200000) | 0x745)
+        ku = ku + 1
     }
 
     // Save kernel L0 address for process page table creation
@@ -3885,12 +3891,28 @@ fn process_receiver() -> i64 {
 
 // Create EL0 process (user space, unprivileged)
 fn create_process_el0(pid: i64, entry: i64) {
-    create_process(pid, entry)
-    // Override SPSR: M[3:0]=0000 (EL0t), DAIF=0 (IRQs enabled)
+    // Copy user code to EL0-accessible 2MB block (0x40200000, AP=01)
+    let user_code = 0x40200000 + pid * 4096
+    let mut ci = 0
+    while ci < 512 {
+        volatile_write(user_code + ci, volatile_read(entry + ci))
+        ci = ci + 8
+    }
+    // I-cache coherence
+    asm!("dsb sy")
+    asm!("isb")
+
+    // Create process with COPIED code address (in EL0-accessible region)
+    create_process(pid, user_code)
+
+    // Override SPSR: M[3:0]=0000 (EL0t)
     let stack_top = 0x48000000 + (pid + 1) * 0x10000 - 16
     let frame_sp = stack_top - 272
-    sched_write_proc(frame_sp + 256, 0)  // SPSR = EL0t
-    // TODO: set SP_EL0 before first context switch to this process
+    sched_write_proc(frame_sp + 256, 0)
+
+    // Set SP_EL0 for user stack
+    let user_sp = 0x48000000 + (pid + 1) * 0x10000 - 0x8000
+    asm!("msr SP_EL0, x0", in("x0") user_sp)
 }
 
 // Process U: runs at EL0, uses SVC for everything
