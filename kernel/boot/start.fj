@@ -158,31 +158,37 @@ fn cmd_help() {
 }
 
 fn cmd_ps() {
-    println("PID STATE  TICKS  NAME")
-    println("--- -----  -----  ----")
+    println("PID STATE  TICKS PRI NAME")
+    println("--- -----  ----- --- ----")
     let mut p = 0
-    while p < 8 {
+    while p < MAX_PROCS {
         let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
         let st = volatile_read(base + 8)
         if st != STATE_FREE {
-            print(" ")
-            putc(48 + p)
+            if p < 10 { print(" ") }
+            print_num(p)
             print("  ")
             if st == STATE_READY { print("READY") }
             if st == STATE_RUNNING { print("*RUN*") }
-            if st == 3 { print("BLOCK") }
-            if st == 4 { print(" DEAD") }
+            if st == STATE_BLOCKED { print("BLOCK") }
+            if st == STATE_TERMINATED { print(" DEAD") }
             // Ticks
             print("  ")
             let ticks = volatile_read(base + 80)
             print_num(ticks)
+            // Priority
+            print("   ")
+            let prio = volatile_read(base + 96)
+            print_num(prio)
             // Name
-            print("    ")
+            print("  ")
             let name_ch = volatile_read(base + 88)
             if name_ch > 0 {
                 putc(name_ch)
             } else {
-                if p == 0 { print("kernel") } else { print("-") }
+                if p == 0 { print("kernel") }
+                if p == 15 { print("idle") }
+                if p > 0 { if p < 15 { print("-") } }
             }
             nl()
         }
@@ -674,8 +680,41 @@ fn cmd_export() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Sprint 36.2: Process commands (run, kill)
+// Process commands (kill, nice)
 // ═══════════════════════════════════════════════════════════════════
+
+fn cmd_is_nice() -> i64 {
+    let len = cmd_len()
+    if len < 7 { 0 }
+    else { if cmd_char(0) == 110 { if cmd_char(1) == 105 { if cmd_char(2) == 99 { if cmd_char(3) == 101 { if cmd_char(4) == 32 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_nice() {
+    // "nice <prio> <pid>" — set process priority
+    // prio: 0=IDLE, 1=NORMAL, 2=HIGH, 3=REALTIME
+    let prio = cmd_char(5) - 48
+    let pid = cmd_char(7) - 48
+    if pid > 0 {
+        if pid < 15 {
+            if prio >= 0 {
+                if prio <= 3 {
+                    let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
+                    let st = volatile_read(base + 8)
+                    if st != STATE_FREE {
+                        volatile_write(base + 96, prio)
+                        print("PID ")
+                        print_num(pid)
+                        print(" prio=")
+                        print_num(prio)
+                        nl()
+                    } else {
+                        println("PID not active")
+                    }
+                } else { println("Prio 0-3") }
+            } else { println("Prio 0-3") }
+        } else { println("Invalid PID") }
+    } else { println("Invalid PID") }
+}
 
 fn cmd_is_kill() -> i64 {
     let len = cmd_len()
@@ -688,7 +727,7 @@ fn cmd_kill() {
     if pid == 0 {
         println("Cannot kill PID 0")
     } else {
-        if pid > 7 {
+        if pid > 14 {
             println("Invalid PID")
         } else {
             let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
@@ -898,26 +937,24 @@ fn cmd_is_top() -> i64 {
 }
 
 fn cmd_top() {
-    // Get total ticks for CPU% calculation
     let total_irqs = volatile_read(0x47001020)
     println("PID ST  TICKS  CPU%")
     println("--- --  -----  ----")
     let mut p = 0
-    while p < 8 {
+    while p < MAX_PROCS {
         let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
         let st = volatile_read(base + 8)
         if st != STATE_FREE {
-            putc(48 + p)
-            print("   ")
-            if st == 0 { putc(45) }
-            if st == 1 { putc(82) }
-            if st == 2 { print("*") }
-            if st == 3 { putc(66) }
-            if st == 4 { putc(68) }
+            if p < 10 { print(" ") }
+            print_num(p)
+            print("  ")
+            if st == STATE_READY { putc(82) }
+            if st == STATE_RUNNING { putc(42) }
+            if st == STATE_BLOCKED { putc(66) }
+            if st == STATE_TERMINATED { putc(68) }
             print("   ")
             let ticks = volatile_read(base + 80)
             print_num(ticks)
-            // CPU% = ticks * 100 / total_irqs
             if total_irqs > 0 {
                 print("    ")
                 let pct = ticks * 100 / total_irqs
@@ -2403,12 +2440,12 @@ fn cmd_is_wait() -> i64 {
 fn cmd_wait() {
     let pid = cmd_char(5) - 48
     if pid > 0 {
-        if pid < 8 {
+        if pid < 15 {
             let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
             let state = volatile_read(base + 8)
-            if state == 4 {
+            if state == STATE_TERMINATED {
                 print("PID ")
-                putc(48 + pid)
+                print_num(pid)
                 println(" already exited")
             } else {
                 if state == STATE_FREE {
@@ -3314,9 +3351,12 @@ fn execute_cmd() {
             cmd_wait()
             handled = 1
         }
+        if cmd_is_nice() == 1 {
+            cmd_nice()
+            handled = 1
+        }
         if handled == 0 {
-            putc(63)
-            nl()
+            println("?")
         }
     }
 }
@@ -3552,16 +3592,16 @@ fn func_table_lookup(name_char: i64) -> i64 {
     0
 }
 
-// Find a free PID slot (1-7, PID 0 is kernel)
+// Find a free PID slot (1-14, PID 0=kernel, PID 15=idle)
 fn find_free_pid() -> i64 {
     let mut pid = 1
-    while pid < 8 {
+    while pid < 15 {
         let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
         let state = volatile_read(base + 8)
         if state == STATE_FREE {
             return pid
         }
-        if state == 4 {
+        if state == STATE_TERMINATED {
             // TERMINATED — recycle
             return pid
         }
@@ -3884,6 +3924,14 @@ fn create_process_el0(pid: i64, entry: i64) {
     asm!("msr SP_EL0, x0", in("x0") user_sp)
 }
 
+// Idle process (PID 15): runs when no other process is READY
+fn process_idle() -> i64 {
+    'idle: loop {
+        asm!("wfi")
+    }
+    0
+}
+
 // Process U: runs at EL0, uses SVC for everything
 fn process_user() -> i64 {
     svc(1, 85, 0)   // SYS_WRITE 'U'
@@ -3898,10 +3946,27 @@ fn process_user() -> i64 {
 // Process table constants
 const PROC_TABLE_BASE: i64 = 0x47000000
 const PROC_SLOT_SIZE: i64 = 256
+const MAX_PROCS: i64 = 16
 const STATE_FREE: i64 = 0
 const STATE_READY: i64 = 1
 const STATE_RUNNING: i64 = 2
+const STATE_BLOCKED: i64 = 3
+const STATE_TERMINATED: i64 = 4
 const CUR_PID: i64 = 0x47001000
+// Process table layout per slot (256 bytes):
+//   [0]  = PID
+//   [8]  = State (FREE/READY/RUNNING/BLOCKED/TERMINATED)
+//   [16] = SP (saved stack pointer)
+//   [24] = PC (entry point, for display)
+//   [56] = wait_target (PID being waited on)
+//   [64] = TTBR0 (page table base)
+//   [80] = ticks (timer IRQ count)
+//   [88] = name_char (process name, single char)
+//   [96] = priority (0=IDLE, 1=NORMAL, 2=HIGH, 3=REALTIME)
+const PRIO_IDLE: i64 = 0
+const PRIO_NORMAL: i64 = 1
+const PRIO_HIGH: i64 = 2
+const PRIO_REALTIME: i64 = 3
 
 // Create a process: set up stack frame for context switch
 fn create_process(pid: i64, entry: i64) {
@@ -3938,9 +4003,13 @@ fn create_process(pid: i64, entry: i64) {
     // Share kernel page table (all processes use same TTBR0 for now)
     let kernel_l0 = volatile_read(0x4700F108)
     sched_write_proc(base + 64, kernel_l0)     // [64] = TTBR0 (shared)
+
+    // Default priority: NORMAL
+    sched_write_proc(base + 96, PRIO_NORMAL)   // [96] = priority
 }
 
-// Simple round-robin scheduler (called from IRQ and SVC handlers)
+// Priority-aware round-robin scheduler (16 PIDs)
+// Higher priority processes are preferred; same priority = round-robin.
 fn sched_switch() {
     let cur = sched_read_proc(CUR_PID)
     let saved_sp = sched_get_saved_sp()
@@ -3956,28 +4025,31 @@ fn sched_switch() {
             sched_write_proc(cur_base + 8, STATE_READY)
         }
 
-        // Find next READY process (round-robin)
-        let mut next = cur + 1
-        let mut found = 0
+        // Find next READY process: highest priority first, then round-robin
+        let mut best_pid = -1
+        let mut best_prio = -1
         let mut checked = 0
-        while checked < 8 {
-            if next > 7 { next = 0 }
-            let next_base = PROC_TABLE_BASE + next * PROC_SLOT_SIZE
-            let next_state = sched_read_proc(next_base + 8)
-            if next_state == STATE_READY {
-                found = 1
-                checked = 8
-            } else {
-                next = next + 1
-                checked = checked + 1
+        let mut candidate = cur + 1
+        while checked < MAX_PROCS {
+            if candidate >= MAX_PROCS { candidate = 0 }
+            let cand_base = PROC_TABLE_BASE + candidate * PROC_SLOT_SIZE
+            let cand_state = sched_read_proc(cand_base + 8)
+            if cand_state == STATE_READY {
+                let cand_prio = sched_read_proc(cand_base + 96)
+                if cand_prio > best_prio {
+                    best_prio = cand_prio
+                    best_pid = candidate
+                }
             }
+            candidate = candidate + 1
+            checked = checked + 1
         }
 
-        // If found a different process, switch to it
-        if found == 1 {
-            let next_base = PROC_TABLE_BASE + next * PROC_SLOT_SIZE
+        // If found a READY process, switch to it
+        if best_pid >= 0 {
+            let next_base = PROC_TABLE_BASE + best_pid * PROC_SLOT_SIZE
             sched_write_proc(next_base + 8, STATE_RUNNING)
-            sched_write_proc(CUR_PID, next)
+            sched_write_proc(CUR_PID, best_pid)
             let next_sp = sched_read_proc(next_base + 16)
             sched_set_next_sp(next_sp)
         }
@@ -4001,7 +4073,7 @@ fn fj_exception_irq() {
 
         // Check wait-wake: if any BLOCKED process waits for a TERMINATED one, wake it
         let mut wp = 0
-        while wp < 8 {
+        while wp < MAX_PROCS {
             let wb = PROC_TABLE_BASE + wp * PROC_SLOT_SIZE
             let ws = sched_read_proc(wb + 8)
             if ws == 3 {
@@ -4058,7 +4130,7 @@ fn kernel_main() -> i64 {
 
     // Init IPC mailbox queues (all zeroed)
     let mut mb_init = 0
-    while mb_init < 8 {
+    while mb_init < MAX_PROCS {
         let mba = ipc_mailbox_addr(mb_init)
         volatile_write(mba, 0)
         volatile_write(mba + 8, 0)
@@ -4081,13 +4153,18 @@ fn kernel_main() -> i64 {
     println("FajarOS v3.0 Surya")
     println("")
 
-    // Process table init: PID 0 = kernel (RUNNING)
+    // Process table init: PID 0 = kernel (RUNNING, HIGH priority)
     sched_write_proc(PROC_TABLE_BASE, 0)
     sched_write_proc(PROC_TABLE_BASE + 8, STATE_RUNNING)
+    sched_write_proc(PROC_TABLE_BASE + 96, PRIO_HIGH)
     sched_write_proc(CUR_PID, 0)
     // Store kernel TTBR0 for PID 0
     let kernel_l0 = volatile_read(0x4700F108)
     sched_write_proc(PROC_TABLE_BASE + 64, kernel_l0)
+
+    // PID 15 = idle process (IDLE priority, always ready)
+    create_process(15, fn_addr(process_idle))
+    sched_write_proc(PROC_TABLE_BASE + 15 * PROC_SLOT_SIZE + 96, PRIO_IDLE)
 
     // Shell loop: read chars, execute on Enter
     prompt()
