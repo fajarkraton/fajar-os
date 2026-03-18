@@ -3744,15 +3744,15 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
         if syscall_num == SYS_KILL {
             // arg1 = target PID
             if arg1 > 0 {
-                if arg1 < 8 {
+                if arg1 < 15 {
                     let base = PROC_TABLE_BASE + arg1 * PROC_SLOT_SIZE
-                    sched_write_proc(base + 8, 4)  // TERMINATED
+                    sched_write_proc(base + 8, STATE_TERMINATED)
                     syscall_set_return(0)
                 } else {
-                    syscall_set_return(0)
+                    syscall_set_return(-1)
                 }
             } else {
-                syscall_set_return(0)
+                syscall_set_return(-1)
             }
         }
 
@@ -3776,6 +3776,54 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
                 syscall_set_return(0)
             }
         }
+    }
+
+    // Data Abort from lower EL (EL0 page fault)
+    if ec == 0x24 {
+        let pid = sched_read_proc(CUR_PID)
+        print("[FAULT] PID ")
+        print_num(pid)
+        print(" data abort at 0x")
+        print_hex32(far)
+        print(" PC=0x")
+        print_hex32(elr)
+        println(" — killed")
+        // Kill the faulting process
+        let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
+        sched_write_proc(base + 8, STATE_TERMINATED)
+        sched_switch()
+    }
+
+    // Data Abort from same EL (kernel page fault — serious!)
+    if ec == 0x25 {
+        print("[PANIC] kernel data abort at 0x")
+        print_hex32(far)
+        print(" PC=0x")
+        print_hex32(elr)
+        nl()
+        // Halt — kernel page fault is unrecoverable
+        asm!("wfi")
+    }
+
+    // Instruction Abort from lower EL (EL0 exec fault)
+    if ec == 0x20 {
+        let pid = sched_read_proc(CUR_PID)
+        print("[FAULT] PID ")
+        print_num(pid)
+        print(" instruction abort at 0x")
+        print_hex32(far)
+        println(" — killed")
+        let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
+        sched_write_proc(base + 8, STATE_TERMINATED)
+        sched_switch()
+    }
+
+    // Instruction Abort from same EL (kernel exec fault)
+    if ec == 0x21 {
+        print("[PANIC] kernel exec fault at 0x")
+        print_hex32(far)
+        nl()
+        asm!("wfi")
     }
 }
 
