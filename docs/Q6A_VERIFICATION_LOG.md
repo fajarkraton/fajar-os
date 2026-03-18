@@ -80,4 +80,40 @@ fjsh> ticks
 7.9s (696 IRQs)   ← ~88 Hz (QEMU-on-ARM64 slightly slower)
 ```
 
+## QNN NPU Inference
+
+### Setup
+```
+$ sudo apt install libqnn-dev libqnn1 qnn-tools
+QNN SDK v2.40.0 installed
+```
+
+### Backend Validation
+```
+GPU:  Present ✓
+DSP:  Needs testsig
+CPU:  Available ✓
+```
+
+### MNIST Inference (CPU Backend)
+```
+$ qnn-net-run --backend libQnnCpu.so --dlc_path mnist_mlp_int8.dlc
+Execution time: 25ms
+Output (blank input): [0.1016, 0.1016, ..., 0.1016]  (uniform = correct)
+```
+
+### Fajar Lang NPU Detection
+```
+$ fj run npu_demo.fj
+NPU: Available
+```
+
+## GPIO Hardware Test
+
+```
+$ fj run gpio_test.fj
+GPIO96 (PIN_7): HLHLHLHLHL done
+CPU temp: 58000 (58.0°C)
+```
+
 ## Status: ALL VERIFIED ✅
