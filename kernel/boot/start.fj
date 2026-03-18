@@ -3590,13 +3590,15 @@ fn find_free_pid() -> i64 {
 // IPC Mailbox System
 // ═══════════════════════════════════════════════════════════════════
 // Each process has a mailbox at 0x47002000 + pid * 64
-// Mailbox: single-message per process (64 bytes each)
-//   [0]  has_message (0=empty, 1=has)
-//   [8]  sender_pid
-//   [16] value
+// Mailbox: 4-message circular queue per process (128 bytes each)
+//   [0]   count (0-4)
+//   [8]   head (read index)
+//   [16]  tail (write index)
+//   [32+i*16] msg[i]: sender(8) + value(8), i=0..3
 
 const IPC_MAILBOX_BASE: i64 = 0x47002000
-const IPC_MAILBOX_SIZE: i64 = 64
+const IPC_MAILBOX_SIZE: i64 = 128
+const IPC_QUEUE_CAP: i64 = 4
 
 fn ipc_mailbox_addr(pid: i64) -> i64 {
     IPC_MAILBOX_BASE + pid * IPC_MAILBOX_SIZE
@@ -3608,17 +3610,27 @@ fn ipc_send(dest_pid: i64, value: i64) -> i64 {
         if dest_pid > 7 { 0 }
         else {
             let mbox = ipc_mailbox_addr(dest_pid)
-            let sender = sched_read_proc(CUR_PID)
-            sched_write_proc(mbox, 1)
-            sched_write_proc(mbox + 8, sender)
-            sched_write_proc(mbox + 16, value)
-            // Wake if BLOCKED
-            let dest_base = PROC_TABLE_BASE + dest_pid * PROC_SLOT_SIZE
-            let dest_state = sched_read_proc(dest_base + 8)
-            if dest_state == 3 {
-                sched_write_proc(dest_base + 8, STATE_READY)
+            let count = sched_read_proc(mbox)
+            if count >= IPC_QUEUE_CAP { 0 }
+            else {
+                let tail = sched_read_proc(mbox + 16)
+                let sender = sched_read_proc(CUR_PID)
+                let msg_addr = mbox + 32 + tail * 16
+                sched_write_proc(msg_addr, sender)
+                sched_write_proc(msg_addr + 8, value)
+                // Advance tail
+                let mut new_tail = tail + 1
+                if new_tail >= IPC_QUEUE_CAP { new_tail = 0 }
+                sched_write_proc(mbox + 16, new_tail)
+                sched_write_proc(mbox, count + 1)
+                // Wake if BLOCKED
+                let dest_base = PROC_TABLE_BASE + dest_pid * PROC_SLOT_SIZE
+                let dest_state = sched_read_proc(dest_base + 8)
+                if dest_state == 3 {
+                    sched_write_proc(dest_base + 8, STATE_READY)
+                }
+                0
             }
-            0
         }
     }
 }
@@ -3626,20 +3638,35 @@ fn ipc_send(dest_pid: i64, value: i64) -> i64 {
 fn ipc_recv() -> i64 {
     let my_pid = sched_read_proc(CUR_PID)
     let mbox = ipc_mailbox_addr(my_pid)
-    let has_msg = sched_read_proc(mbox)
-    if has_msg == 1 {
-        let value = sched_read_proc(mbox + 16)
-        sched_write_proc(mbox, 0)
+    let count = sched_read_proc(mbox)
+    if count > 0 {
+        let head = sched_read_proc(mbox + 8)
+        let msg_addr = mbox + 32 + head * 16
+        let value = sched_read_proc(msg_addr + 8)
+        let mut new_head = head + 1
+        if new_head >= IPC_QUEUE_CAP { new_head = 0 }
+        sched_write_proc(mbox + 8, new_head)
+        sched_write_proc(mbox, count - 1)
         value
     } else {
         // Block and yield
         let my_base = PROC_TABLE_BASE + my_pid * PROC_SLOT_SIZE
         sched_write_proc(my_base + 8, 3)
         sched_switch()
-        // Woken — read message
-        let value2 = sched_read_proc(mbox + 16)
-        sched_write_proc(mbox, 0)
-        value2
+        // Woken — try read
+        let count2 = sched_read_proc(mbox)
+        if count2 > 0 {
+            let head2 = sched_read_proc(mbox + 8)
+            let msg_addr2 = mbox + 32 + head2 * 16
+            let value2 = sched_read_proc(msg_addr2 + 8)
+            let mut new_head2 = head2 + 1
+            if new_head2 >= IPC_QUEUE_CAP { new_head2 = 0 }
+            sched_write_proc(mbox + 8, new_head2)
+            sched_write_proc(mbox, count2 - 1)
+            value2
+        } else {
+            0
+        }
     }
 }
 
