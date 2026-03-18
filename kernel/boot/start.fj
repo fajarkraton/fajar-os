@@ -2613,6 +2613,34 @@ fn cmd_ipc() {
     putc(53) putc(58) putc(114) putc(101) putc(99) putc(118) nl()
 }
 
+// "spawn X" — spawn process by name (a, b, c, s, r)
+fn cmd_is_spawn() -> i64 {
+    let len = cmd_len()
+    if len != 7 { 0 }
+    else { if cmd_char(0) == 115 { if cmd_char(1) == 112 { if cmd_char(2) == 97 { if cmd_char(3) == 119 { if cmd_char(4) == 110 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_spawn() {
+    let name_char = cmd_char(6)
+    let entry = func_table_lookup(name_char)
+    if entry > 0 {
+        let pid = find_free_pid()
+        if pid > 0 {
+            create_process(pid, entry)
+            // "Spawned PID N"
+            putc(80) putc(73) putc(68) putc(32)
+            putc(48 + pid)
+            nl()
+        } else {
+            // "No free PID"
+            putc(78) putc(111) putc(32) putc(80) putc(73) putc(68) nl()
+        }
+    } else {
+        // "Unknown: X"
+        putc(63) putc(32) putc(name_char) nl()
+    }
+}
+
 // "demo" — start preemptive multitasking demo (2 processes)
 fn cmd_is_demo() -> i64 {
     let len = cmd_len()
@@ -3427,6 +3455,10 @@ fn execute_cmd() {
             cmd_ipc()
             handled = 1
         }
+        if cmd_is_spawn() == 1 {
+            cmd_spawn()
+            handled = 1
+        }
         if handled == 0 {
             putc(63)
             nl()
@@ -3532,6 +3564,65 @@ const SYS_YIELD: i64 = 2
 const SYS_GETPID: i64 = 3
 const SYS_IPC_SEND: i64 = 4
 const SYS_IPC_RECV: i64 = 5
+const SYS_SPAWN: i64 = 6
+const SYS_KILL: i64 = 7
+const SYS_WAIT: i64 = 8
+const SYS_READ: i64 = 9
+
+// ═══════════════════════════════════════════════════════════════════
+// Process Function Table (for spawn command)
+// ═══════════════════════════════════════════════════════════════════
+// Maps single-char names to entry addresses
+// Stored at 0x47003000: [char, 0, 0, 0, 0, 0, 0, 0, entry_addr(8 bytes)] × 8 = 128 bytes
+
+const FUNC_TABLE_BASE: i64 = 0x4700E000
+const FUNC_TABLE_ENTRY_SIZE: i64 = 16
+const FUNC_TABLE_MAX: i64 = 8
+
+fn func_table_init() {
+    // Register known process functions using volatile_write (works in main context)
+    volatile_write(FUNC_TABLE_BASE + 0, 97)
+    volatile_write(FUNC_TABLE_BASE + 8, fn_addr(process_a))
+    volatile_write(FUNC_TABLE_BASE + 16, 98)
+    volatile_write(FUNC_TABLE_BASE + 24, fn_addr(process_b))
+    volatile_write(FUNC_TABLE_BASE + 32, 99)
+    volatile_write(FUNC_TABLE_BASE + 40, fn_addr(process_c))
+    volatile_write(FUNC_TABLE_BASE + 48, 115)
+    volatile_write(FUNC_TABLE_BASE + 56, fn_addr(process_sender))
+    volatile_write(FUNC_TABLE_BASE + 64, 114)
+    volatile_write(FUNC_TABLE_BASE + 72, fn_addr(process_receiver))
+}
+
+fn func_table_lookup(name_char: i64) -> i64 {
+    let mut i = 0
+    while i < FUNC_TABLE_MAX {
+        let addr = FUNC_TABLE_BASE + i * FUNC_TABLE_ENTRY_SIZE
+        let ch = volatile_read(addr)
+        if ch == name_char {
+            return volatile_read(addr + 8)
+        }
+        i = i + 1
+    }
+    0
+}
+
+// Find a free PID slot (1-7, PID 0 is kernel)
+fn find_free_pid() -> i64 {
+    let mut pid = 1
+    while pid < 8 {
+        let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
+        let state = volatile_read(base + 8)
+        if state == STATE_FREE {
+            return pid
+        }
+        if state == 4 {
+            // TERMINATED — recycle
+            return pid
+        }
+        pid = pid + 1
+    }
+    0
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // IPC Mailbox System
@@ -3639,6 +3730,43 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
             // ipc_recv() → blocks if no message
             let value = ipc_recv()
             syscall_set_return(value)
+        }
+
+        if syscall_num == SYS_SPAWN {
+            // arg1 = entry address
+            let pid = find_free_pid()
+            if pid > 0 {
+                create_process(pid, arg1)
+                syscall_set_return(pid)
+            } else {
+                syscall_set_return(0)
+            }
+        }
+
+        if syscall_num == SYS_KILL {
+            // arg1 = target PID
+            if arg1 > 0 {
+                if arg1 < 8 {
+                    let base = PROC_TABLE_BASE + arg1 * PROC_SLOT_SIZE
+                    sched_write_proc(base + 8, 4)  // TERMINATED
+                    syscall_set_return(0)
+                } else {
+                    syscall_set_return(0)
+                }
+            } else {
+                syscall_set_return(0)
+            }
+        }
+
+        if syscall_num == SYS_READ {
+            // Non-blocking read from UART
+            let fr = volatile_read_u32(0x09000018)
+            if (fr & 16) == 0 {
+                let ch = volatile_read_u32(0x09000000) & 0xFF
+                syscall_set_return(ch)
+            } else {
+                syscall_set_return(0)
+            }
         }
     }
 }
@@ -3855,6 +3983,9 @@ fn kernel_main() -> i64 {
     volatile_write(IRQ_COUNT_ADDR, 0)
     volatile_write(CTX_SWITCH_SP, 0)
     volatile_write(SAVED_SP_ADDR, 0)
+
+    // Init process function table (for spawn command)
+    func_table_init()
 
     // Init preemptive timer (10ms quantum, IRQ 30)
     timer_init_preempt()
