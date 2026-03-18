@@ -106,22 +106,26 @@ ssh radxa@192.168.50.94 "sudo /tmp/fjaros.elf"  # userspace test
 
 ---
 
-## 5. Plan
+## 5. Current Status (v3.1)
 
-See `docs/V30_PLAN.md` — 10 phases, 42 sprints, 420 tasks.
+```
+Kernel LOC:     4,805 (100% Fajar Lang)
+Shell commands: 152
+Syscalls:       17
+Max PIDs:       16
+Priority levels: 4 (IDLE, NORMAL, HIGH, REALTIME)
+Services:       3 (UART, Timer, Memory)
+Pipes:          8 × 4KB
+Signals:        SIGTERM, SIGKILL, SIGCHLD
+Page tables:    Per-process TTBR0 switch
+EL0:            User processes at unprivileged level
+Faults:         Data/instruction abort handlers
+```
 
-| Phase | Focus | Sprints | LOC |
-|-------|-------|---------|-----|
-| 1 | Bare Metal Boot | S1-S4 | ~3K |
-| 2 | Memory Management | S5-S8 | ~5K |
-| 3 | Process & IPC | S9-S12 | ~8K |
-| 4 | HAL Drivers | S13-S18 | ~15K |
-| 5 | Filesystem & Storage | S19-S22 | ~8K |
-| 6 | Networking | S23-S26 | ~6K |
-| 7 | Display & Input | S27-S30 | ~5K |
-| 8 | AI Integration | S31-S36 | ~5K |
-| 9 | Shell & Apps | S37-S40 | ~3K |
-| 10 | Production | S41-S42 | ~2K |
+### Plans
+- `docs/V30_PLAN.md` — original 10-phase plan (420 tasks)
+- `docs/IMPLEMENTATION_PLAN_V31.md` — v3.1 plan (6 phases, 55 tasks)
+- Fajar Lang `docs/IMPLEMENTATION_PLAN_V32.md` — v3.2 plan (8 phases, 320 tasks)
 
 ---
 
