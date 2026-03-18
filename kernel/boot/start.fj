@@ -2584,6 +2584,35 @@ fn cmd_sync() {
     }
 }
 
+// "ipc" — start IPC demo (sender PID 4 → receiver PID 5)
+fn cmd_is_ipc() -> i64 {
+    let len = cmd_len()
+    if len != 3 { 0 }
+    else { if cmd_char(0) == 105 { if cmd_char(1) == 112 { if cmd_char(2) == 99 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_ipc() {
+    // "IPC demo: PID4(sender) -> PID5(receiver)"
+    putc(73) putc(80) putc(67) putc(32) putc(100) putc(101) putc(109) putc(111) nl()
+
+    // Init PID 0
+    sched_write_proc(PROC_TABLE_BASE, 0)
+    sched_write_proc(PROC_TABLE_BASE + 8, STATE_RUNNING)
+    sched_write_proc(CUR_PID, 0)
+
+    // Clear mailboxes
+    sched_write_proc(ipc_mailbox_addr(4), 0)
+    sched_write_proc(ipc_mailbox_addr(5), 0)
+
+    // Create sender (PID 4) and receiver (PID 5)
+    create_process(4, fn_addr(process_sender))
+    create_process(5, fn_addr(process_receiver))
+
+    // "4:send 5:recv"
+    putc(52) putc(58) putc(115) putc(101) putc(110) putc(100) putc(32)
+    putc(53) putc(58) putc(114) putc(101) putc(99) putc(118) nl()
+}
+
 // "demo" — start preemptive multitasking demo (2 processes)
 fn cmd_is_demo() -> i64 {
     let len = cmd_len()
@@ -3394,6 +3423,10 @@ fn execute_cmd() {
             cmd_kill()
             handled = 1
         }
+        if cmd_is_ipc() == 1 {
+            cmd_ipc()
+            handled = 1
+        }
         if handled == 0 {
             putc(63)
             nl()
@@ -3497,6 +3530,66 @@ const SYS_EXIT: i64 = 0
 const SYS_WRITE: i64 = 1
 const SYS_YIELD: i64 = 2
 const SYS_GETPID: i64 = 3
+const SYS_IPC_SEND: i64 = 4
+const SYS_IPC_RECV: i64 = 5
+
+// ═══════════════════════════════════════════════════════════════════
+// IPC Mailbox System
+// ═══════════════════════════════════════════════════════════════════
+// Each process has a mailbox at 0x47002000 + pid * 64
+// Mailbox layout (64 bytes):
+//   [0]  has_message: 0=empty, 1=message waiting
+//   [8]  sender_pid
+//   [16] value (single i64 message for simplicity)
+//   [24] reserved
+
+const IPC_MAILBOX_BASE: i64 = 0x47002000
+const IPC_MAILBOX_SIZE: i64 = 64
+
+fn ipc_mailbox_addr(pid: i64) -> i64 {
+    IPC_MAILBOX_BASE + pid * IPC_MAILBOX_SIZE
+}
+
+// Send message to destination process
+fn ipc_send(dest_pid: i64, value: i64) -> i64 {
+    if dest_pid < 0 { return -1 }
+    if dest_pid > 7 { return -1 }
+    let mbox = ipc_mailbox_addr(dest_pid)
+    let sender = sched_read_proc(CUR_PID)
+    sched_write_proc(mbox, 1)           // has_message = 1
+    sched_write_proc(mbox + 8, sender)  // sender_pid
+    sched_write_proc(mbox + 16, value)  // message value
+
+    // Wake destination if BLOCKED
+    let dest_base = PROC_TABLE_BASE + dest_pid * PROC_SLOT_SIZE
+    let dest_state = sched_read_proc(dest_base + 8)
+    if dest_state == 3 {
+        // BLOCKED → READY
+        sched_write_proc(dest_base + 8, STATE_READY)
+    }
+    0
+}
+
+// Receive message (returns value, or blocks if no message)
+fn ipc_recv() -> i64 {
+    let my_pid = sched_read_proc(CUR_PID)
+    let mbox = ipc_mailbox_addr(my_pid)
+    let has_msg = sched_read_proc(mbox)
+    if has_msg == 1 {
+        let value = sched_read_proc(mbox + 16)
+        sched_write_proc(mbox, 0)  // clear mailbox
+        value
+    } else {
+        // No message — block and yield
+        let my_base = PROC_TABLE_BASE + my_pid * PROC_SLOT_SIZE
+        sched_write_proc(my_base + 8, 3)  // BLOCKED
+        sched_switch()
+        // When we wake up, check again
+        let value2 = sched_read_proc(mbox + 16)
+        sched_write_proc(mbox, 0)
+        value2
+    }
+}
 
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
     // ESR.EC (bits 31:26) = 0x15 → SVC from AArch64
@@ -3534,6 +3627,18 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
             // Return current PID
             let pid = sched_read_proc(CUR_PID)
             syscall_set_return(pid)
+        }
+
+        if syscall_num == SYS_IPC_SEND {
+            // ipc_send(dest_pid=arg1, value=arg2)
+            let result = ipc_send(arg1, arg2)
+            syscall_set_return(result)
+        }
+
+        if syscall_num == SYS_IPC_RECV {
+            // ipc_recv() → blocks if no message
+            let value = ipc_recv()
+            syscall_set_return(value)
         }
     }
 }
@@ -3601,6 +3706,36 @@ fn process_c() -> i64 {
     }
     // SYS_EXIT(0)
     svc(0, 0, 0)
+    0
+}
+
+// Process D: IPC sender — sends messages to PID 5
+fn process_sender() -> i64 {
+    let mut i = 0
+    while i < 10 {
+        // Send character 'S' (83) + i to PID 5
+        svc(4, 5, 83 + i)  // SYS_IPC_SEND(4), dest=5, value=83+i
+        // Print 's' to show we sent
+        svc(1, 115, 0)     // SYS_WRITE, char='s'
+        let mut j = 0
+        while j < 50000 { j = j + 1 }
+        i = i + 1
+    }
+    svc(0, 0, 0)  // SYS_EXIT
+    0
+}
+
+// Process E: IPC receiver — prints 'R' for each received message
+fn process_receiver() -> i64 {
+    let mut i = 0
+    while i < 10 {
+        // Print 'R' via syscall (test that SVC works in this process)
+        svc(1, 82, 0)      // SYS_WRITE, char='R'
+        // Try to receive message
+        svc(5, 0, 0)        // SYS_IPC_RECV (may block)
+        i = i + 1
+    }
+    svc(0, 0, 0)  // SYS_EXIT
     0
 }
 
