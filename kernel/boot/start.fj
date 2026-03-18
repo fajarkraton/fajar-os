@@ -3562,9 +3562,10 @@ fn mmu_init() {
         k = k + 1
     }
 
+    // Save kernel L0 address for process page table creation
+    volatile_write(0x4700F108, l0)
+
     // Enable MMU: mmu_enable(mair, tcr, ttbr0)
-    // MAIR: idx0=0x00(Device), idx1=0xFF(Normal WB) → 0xFF00
-    // TCR: T0SZ=16, TG0=4KB, SH0=inner, ORGN0=WB, IRGN0=WB → 0x803510
     mmu_enable(0xFF00, 0x803510, l0)
 }
 
@@ -4009,6 +4010,16 @@ fn create_process(pid: i64, entry: i64) {
     // Save initial SP in process table
     sched_write_proc(base + 16, frame_sp) // [16] = SP
     sched_write_proc(base + 24, entry)    // [24] = PC (for display)
+
+    // Create per-process page table (copy kernel L0 entry)
+    // For now, all processes share the same mapping (identity)
+    // but each has its own L0 table for future isolation
+    let proc_l0 = mmu_pt_alloc()
+    // Copy kernel L0[0] entry (shared L1 table pointer)
+    let kernel_l0 = volatile_read(0x4700F108)  // saved kernel L0 addr
+    let l0_entry = volatile_read(kernel_l0)    // L0[0] → L1 pointer
+    volatile_write(proc_l0, l0_entry)          // same L1 for this process
+    sched_write_proc(base + 64, proc_l0)       // [64] = TTBR0
 }
 
 // Simple round-robin scheduler (called from IRQ handler)
@@ -4049,6 +4060,11 @@ fn sched_switch() {
         sched_write_proc(next_base + 8, STATE_RUNNING)
         sched_write_proc(CUR_PID, next)
         let next_sp = sched_read_proc(next_base + 16)
+        // Switch page tables (TTBR0) for process isolation
+        let next_ttbr0 = sched_read_proc(next_base + 64)
+        if next_ttbr0 > 0 {
+            switch_ttbr0(next_ttbr0)
+        }
         sched_set_next_sp(next_sp)
     }
 }
@@ -4156,6 +4172,9 @@ fn kernel_main() -> i64 {
     sched_write_proc(PROC_TABLE_BASE, 0)
     sched_write_proc(PROC_TABLE_BASE + 8, STATE_RUNNING)
     sched_write_proc(CUR_PID, 0)
+    // Store kernel TTBR0 for PID 0
+    let kernel_l0 = volatile_read(0x4700F108)
+    sched_write_proc(PROC_TABLE_BASE + 64, kernel_l0)
 
     // Shell loop: read chars, execute on Enter
     prompt()
