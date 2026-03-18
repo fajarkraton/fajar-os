@@ -142,137 +142,19 @@ fn help_line(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) {
 }
 
 fn cmd_help() {
-    // "Commands:"
-    putc(67)
-    putc(111)
-    putc(109)
-    putc(109)
-    putc(97)
-    putc(110)
-    putc(100)
-    putc(115)
-    putc(58)
-    nl()
-    help_line(104, 101, 108, 112, 32, 32)
-    help_line(112, 115, 32, 32, 32, 32)
-    help_line(109, 101, 109, 32, 32, 32)
-    help_line(101, 99, 104, 111, 32, 46)
-    help_line(117, 112, 116, 105, 109, 101)
-    help_line(99, 108, 101, 97, 114, 32)
-    // "  peek <addr>"
-    help_line(112, 101, 101, 107, 32, 46)
-    // "  ticks"
-    help_line(116, 105, 99, 107, 115, 32)
-    // "  poke ."
-    help_line(112, 111, 107, 101, 32, 46)
-    // "  dump ."
-    help_line(100, 117, 109, 112, 32, 46)
-    // "  sleep."
-    help_line(115, 108, 101, 101, 112, 46)
-    // "  versio" (version)
-    help_line(118, 101, 114, 115, 105, 111)
-    // "  halt  "
-    help_line(104, 97, 108, 116, 32, 32)
-    // "  whoami"
-    help_line(119, 104, 111, 97, 109, 105)
-    // "  date  "
-    help_line(100, 97, 116, 101, 32, 32)
-    // "  histor" (history)
-    help_line(104, 105, 115, 116, 111, 114)
-    // "  reg   "
-    help_line(114, 101, 103, 32, 32, 32)
-    // "  bench "
-    help_line(98, 101, 110, 99, 104, 32)
-    // "  env   "
-    help_line(101, 110, 118, 32, 32, 32)
-    // "  export"
-    help_line(101, 120, 112, 111, 114, 116)
-    // "  kill ."
-    help_line(107, 105, 108, 108, 32, 46)
-    // "  free  "
-    help_line(102, 114, 101, 101, 32, 32)
-    // "  fill ."
-    help_line(102, 105, 108, 108, 32, 46)
-    // "  hex  ."
-    help_line(104, 101, 120, 32, 32, 46)
-    // "  dmesg "
-    help_line(100, 109, 101, 115, 103, 32)
-    // "  cmp  ."
-    help_line(99, 109, 112, 32, 32, 46)
-    // "  test  "
-    help_line(116, 101, 115, 116, 32, 32)
-    // "  top   "
-    help_line(116, 111, 112, 32, 32, 32)
-    // "  about "
-    help_line(97, 98, 111, 117, 116, 32)
-    // "  log  ."
-    help_line(108, 111, 103, 32, 32, 46)
-    // "  colors"
-    help_line(99, 111, 108, 111, 114, 115)
-    // "  calc ."
-    help_line(99, 97, 108, 99, 32, 46)
-    // "  reboot"
-    help_line(114, 101, 98, 111, 111, 116)
-    // "  time ."
-    help_line(116, 105, 109, 101, 32, 46)
-    // "  seq  ."
-    help_line(115, 101, 113, 32, 32, 46)
-    // "  xxd  ."
-    help_line(120, 120, 100, 32, 32, 46)
-    // "  rand  "
-    help_line(114, 97, 110, 100, 32, 32)
-    // "  loops."
-    help_line(108, 111, 111, 112, 115, 46)
-    // "  ascii "
-    help_line(97, 115, 99, 105, 105, 32)
-    // "  bits ."
-    help_line(98, 105, 116, 115, 32, 46)
-    // "  prime."
-    help_line(112, 114, 105, 109, 101, 46)
-    // "  swap ."
-    help_line(115, 119, 97, 112, 32, 46)
-    // "  wc    "
-    help_line(119, 99, 32, 32, 32, 32)
-    // "  head ."
-    help_line(104, 101, 97, 100, 32, 46)
-    // "  fib  ."
-    help_line(102, 105, 98, 32, 32, 46)
-    // "  fact ."
-    help_line(102, 97, 99, 116, 32, 46)
-    // "  gcd  ."
-    help_line(103, 99, 100, 32, 32, 46)
-    // "  pow  ."
-    help_line(112, 111, 119, 32, 32, 46)
-    // "  sysinf"
-    help_line(115, 121, 115, 105, 110, 102)
-    // "  ls    "
-    help_line(108, 115, 32, 32, 32, 32)
-    // "  touch."
-    help_line(116, 111, 117, 99, 104, 46)
-    // "  rm   ."
-    help_line(114, 109, 32, 32, 32, 46)
-    // "  cat  ."
-    help_line(99, 97, 116, 32, 32, 46)
-    // "  stat ."
-    help_line(115, 116, 97, 116, 32, 46)
-    // "  mkdir."
-    help_line(109, 107, 100, 105, 114, 46)
-    // "  cp   ."
-    help_line(99, 112, 32, 32, 32, 46)
-    // "  mount "
-    help_line(109, 111, 117, 110, 116, 32)
-    // "  lsfat "
-    help_line(108, 115, 102, 97, 116, 32)
-    // "  catfat"
-    help_line(99, 97, 116, 102, 97, 116)
-    // "  df    "
-    help_line(100, 102, 32, 32, 32, 32)
-    // "  write." (writefat)
-    help_line(119, 114, 105, 116, 101, 46)
-    // "  rmfat "
-    help_line(114, 109, 102, 97, 116, 32)
-    // "  sync  "
-    help_line(115, 121, 110, 99, 32, 32)
+    println("Commands:")
+    println("  help ps mem echo uptime clear")
+    println("  peek poke dump ticks sleep")
+    println("  version halt whoami date history")
+    println("  reg bench env export kill free")
+    println("  fill hex dmesg cmp test top")
+    println("  about log colors calc reboot")
+    println("  time seq xxd rand loops ascii")
+    println("  bits prime swap wc head fib")
+    println("  fact gcd pow sysinfo ls touch")
+    println("  rm cat stat mkdir cp mount")
+    println("  lsfat catfat df sync spawn wait")
+    println("  demo ipc")
 }
 
 fn cmd_ps() {
@@ -2565,8 +2447,7 @@ fn cmd_is_ipc() -> i64 {
 }
 
 fn cmd_ipc() {
-    // "IPC demo: PID4(sender) -> PID5(receiver)"
-    putc(73) putc(80) putc(67) putc(32) putc(100) putc(101) putc(109) putc(111) nl()
+    println("IPC demo")
 
     // Init PID 0
     sched_write_proc(PROC_TABLE_BASE, 0)
@@ -2669,9 +2550,7 @@ fn cmd_is_demo() -> i64 {
 }
 
 fn cmd_demo() {
-    // "Starting preemptive multitasking demo..."
-    putc(83) putc(116) putc(97) putc(114) putc(116) putc(105) putc(110) putc(103)
-    putc(32) putc(100) putc(101) putc(109) putc(111) putc(46) putc(46) putc(46) nl()
+    println("Starting demo...")
 
     // Set PID 0 (kernel) as RUNNING
     let pid0_base = PROC_TABLE_BASE
@@ -4161,26 +4040,8 @@ fn kernel_main() -> i64 {
     dmesg_log(83, 72, 69, 76)
 
     // Banner
-    putc(70)
-    putc(97)
-    putc(106)
-    putc(97)
-    putc(114)
-    putc(79)
-    putc(83)
-    putc(32)
-    putc(118)
-    putc(51)
-    putc(46)
-    putc(48)
-    putc(32)
-    putc(83)
-    putc(117)
-    putc(114)
-    putc(121)
-    putc(97)
-    nl()
-    nl()
+    println("FajarOS v3.0 Surya")
+    println("")
 
     // Process table init: PID 0 = kernel (RUNNING)
     sched_write_proc(PROC_TABLE_BASE, 0)
