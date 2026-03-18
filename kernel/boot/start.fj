@@ -312,7 +312,10 @@ fn cmd_ps() {
             if p == 2 {
                 putc(112) putc(114) putc(111) putc(99) putc(95) putc(98) // proc_b
             }
-            if p > 2 {
+            if p == 3 {
+                putc(112) putc(114) putc(111) putc(99) putc(95) putc(99) // proc_c
+            }
+            if p > 3 {
                 putc(112) putc(114) putc(111) putc(99) // proc
                 putc(48 + p)
             }
@@ -2599,18 +2602,15 @@ fn cmd_demo() {
     sched_write_proc(pid0_base + 8, STATE_RUNNING)
     sched_write_proc(CUR_PID, 0)
 
-    // Create PID 1 (process_a) and PID 2 (process_b)
-    let entry_a = fn_addr(process_a)
-    let entry_b = fn_addr(process_b)
-    create_process(1, entry_a)
-    create_process(2, entry_b)
+    // Create PID 1 (A=direct), PID 2 (B=direct), PID 3 (C=syscall)
+    create_process(1, fn_addr(process_a))
+    create_process(2, fn_addr(process_b))
+    create_process(3, fn_addr(process_c))
 
-    // "PID 1: A  PID 2: B"
-    putc(80) putc(73) putc(68) putc(49) putc(58) putc(65)
-    putc(32) putc(32)
-    putc(80) putc(73) putc(68) putc(50) putc(58) putc(66) nl()
-    // "Output: ABABAB... (Ctrl+C to stop)"
-    putc(79) putc(117) putc(116) putc(112) putc(117) putc(116) putc(58) putc(32) nl()
+    // "PID1:A PID2:B PID3:C(syscall)"
+    putc(49) putc(58) putc(65) putc(32)
+    putc(50) putc(58) putc(66) putc(32)
+    putc(51) putc(58) putc(67) putc(40) putc(115) putc(118) putc(99) putc(41) nl()
 }
 
 fn cmd_is_ls() -> i64 {
@@ -3492,7 +3492,50 @@ fn timer_irq_total() -> i64 {
 // Exception Handlers
 // ═══════════════════════════════════════════════════════════════════
 
+// Syscall numbers
+const SYS_EXIT: i64 = 0
+const SYS_WRITE: i64 = 1
+const SYS_YIELD: i64 = 2
+const SYS_GETPID: i64 = 3
+
 fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
+    // ESR.EC (bits 31:26) = 0x15 → SVC from AArch64
+    let ec = (esr >> 26) & 0x3F
+    if ec == 0x15 {
+        // SVC syscall — advance ELR past the SVC instruction (+4 bytes)
+        let saved_sp = sched_get_saved_sp()
+        sched_write_proc(saved_sp + 248, elr + 4)
+
+        // Syscall number in saved x0, args in saved x1, x2
+        let syscall_num = syscall_arg0()
+        let arg1 = syscall_arg1()
+        let arg2 = syscall_arg2()
+
+        if syscall_num == SYS_EXIT {
+            // Exit current process
+            let pid = sched_read_proc(CUR_PID)
+            let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
+            sched_write_proc(base + 8, 4)  // TERMINATED
+            // Switch to next process
+            sched_switch()
+        }
+
+        if syscall_num == SYS_WRITE {
+            // Write arg1 bytes: arg1 = character to print (simplified)
+            putc(arg1)
+        }
+
+        if syscall_num == SYS_YIELD {
+            // Voluntary yield
+            sched_switch()
+        }
+
+        if syscall_num == SYS_GETPID {
+            // Return current PID
+            let pid = sched_read_proc(CUR_PID)
+            syscall_set_return(pid)
+        }
+    }
 }
 
 // Context switch flag address (checked by vector stub after handler returns)
@@ -3531,6 +3574,24 @@ fn process_b() -> i64 {
     let mut i = 0
     while i < 200 {
         putc(66)
+        let mut j = 0
+        while j < 30000 {
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let my_pid = sched_read_proc(CUR_PID)
+    let my_base = PROC_TABLE_BASE + my_pid * PROC_SLOT_SIZE
+    sched_write_proc(my_base + 8, 4)
+    asm!("wfi")
+    0
+}
+
+// Process C: prints "C" directly (testing scheduler with 3+ processes)
+fn process_c() -> i64 {
+    let mut i = 0
+    while i < 200 {
+        putc(67)
         let mut j = 0
         while j < 30000 {
             j = j + 1
@@ -3599,13 +3660,13 @@ fn sched_switch() {
     let mut next = cur + 1
     let mut found = 0
     let mut checked = 0
-    while checked < 3 {
-        if next > 2 { next = 0 }
+    while checked < 8 {
+        if next > 7 { next = 0 }
         let next_base = PROC_TABLE_BASE + next * PROC_SLOT_SIZE
         let next_state = sched_read_proc(next_base + 8)
         if next_state == STATE_READY {
             found = 1
-            checked = 3
+            checked = 8
         } else {
             next = next + 1
             checked = checked + 1
