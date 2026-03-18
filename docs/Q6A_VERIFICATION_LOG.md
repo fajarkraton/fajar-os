@@ -117,3 +117,30 @@ CPU temp: 58000 (58.0°C)
 ```
 
 ## Status: ALL VERIFIED ✅
+
+## QNN Benchmark Results (2026-03-18)
+
+### CPU Backend Performance
+```
+Model:       MNIST MLP INT8 (DLC format)
+Backend:     QNN CPU (Kryo 670)
+Runs:        10
+Average:     23.8 ms/inference
+Min:         11.0 ms (warm cache)
+Max:         60.6 ms (cold start)
+Throughput:  42 inferences/sec
+```
+
+### Backend Status
+| Backend | Status | Notes |
+|---------|--------|-------|
+| CPU | ✅ Working | 23.8ms avg, 42 inf/sec |
+| GPU (Adreno) | ❌ Gemm unsupported | OpenCL 3.0 installed, but INT8 Gemm not on GPU |
+| HTP (Hexagon) | ❌ Needs testsig | CDSP transport failed, unsigned DSP code blocked |
+
+### OpenCL Info
+```
+Platform: QUALCOMM Snapdragon(TM)
+Version:  OpenCL 3.0 QUALCOMM build 0838.2
+Profile:  FULL_PROFILE
+```
