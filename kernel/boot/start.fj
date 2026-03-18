@@ -2923,7 +2923,10 @@ fn cmd_bench() {
 // ═══════════════════════════════════════════════════════════════════
 
 fn prompt() {
-    print("fjsh> ")
+    print("[")
+    let pid = volatile_read(CUR_PID)
+    putc(48 + pid)
+    print("] fjsh> ")
 }
 
 fn cmd_is_clear() -> i64 {
@@ -2977,6 +2980,60 @@ fn cmd_mem() {
     asm!("mrs x0, CurrentEL", out("x0") el)
     putc(48 + ((el >> 2) & 3))
     nl()
+}
+
+fn tab_complete() {
+    // Simple tab completion: match first char against known commands
+    let len = cmd_len()
+    if len == 0 { return }
+    let c0 = cmd_char(0)
+
+    // Single-char completions
+    if len == 1 {
+        if c0 == 104 { // 'h' → help
+            print("elp")
+            cmd_push(101) cmd_push(108) cmd_push(112)
+        }
+        if c0 == 112 { // 'p' → ps
+            print("s")
+            cmd_push(115)
+        }
+        if c0 == 116 { // 't' → top
+            print("op")
+            cmd_push(111) cmd_push(112)
+        }
+        if c0 == 100 { // 'd' → demo
+            print("emo")
+            cmd_push(101) cmd_push(109) cmd_push(111)
+        }
+        if c0 == 109 { // 'm' → mem
+            print("em")
+            cmd_push(101) cmd_push(109)
+        }
+        if c0 == 117 { // 'u' → uptime
+            print("ptime")
+            cmd_push(112) cmd_push(116) cmd_push(105) cmd_push(109) cmd_push(101)
+        }
+    }
+    if len == 2 {
+        let c1 = cmd_char(1)
+        if c0 == 115 {
+            if c1 == 112 { // 'sp' → spawn
+                print("awn ")
+                cmd_push(97) cmd_push(119) cmd_push(110) cmd_push(32)
+            }
+            if c1 == 121 { // 'sy' → sysinfo
+                print("sinfo")
+                cmd_push(115) cmd_push(105) cmd_push(110) cmd_push(102) cmd_push(111)
+            }
+        }
+        if c0 == 107 {
+            if c1 == 105 { // 'ki' → kill
+                print("ll ")
+                cmd_push(108) cmd_push(108) cmd_push(32)
+            }
+        }
+    }
 }
 
 fn execute_cmd() {
@@ -4056,8 +4113,19 @@ fn kernel_main() -> i64 {
                     cmd_clear()
                     prompt()
                 } else {
+                    if c == 9 {
+                        // Tab — autocomplete
+                        tab_complete()
+                    } else {
+                    if c == 3 {
+                        // Ctrl+C — cancel current input
+                        print("^C")
+                        nl()
+                        cmd_clear()
+                        prompt()
+                    } else {
                     if c == 127 {
-                        // Backspace
+                        // Backspace (DEL key)
                         let len = cmd_len()
                         if len > 0 {
                             volatile_write(0x47003080, len - 1)
@@ -4066,10 +4134,62 @@ fn kernel_main() -> i64 {
                             putc(8)
                         }
                     } else {
+                    if c == 8 {
+                        // Backspace (BS key)
+                        let len = cmd_len()
+                        if len > 0 {
+                            volatile_write(0x47003080, len - 1)
+                            putc(8)
+                            putc(32)
+                            putc(8)
+                        }
+                    } else {
+                    if c == 27 {
+                        // ESC sequence — check for arrow keys
+                        // Arrow keys: ESC [ A/B/C/D
+                        if uart_has_char() == 1 {
+                            let c2 = uart_getc()
+                            if c2 == 91 {
+                                if uart_has_char() == 1 {
+                                    let c3 = uart_getc()
+                                    if c3 == 65 {
+                                        // Up arrow — recall previous command
+                                        let count = volatile_read(0x47004800)
+                                        if count > 0 {
+                                            // Clear current line
+                                            let cur_len = cmd_len()
+                                            let mut cl = 0
+                                            while cl < cur_len {
+                                                putc(8) putc(32) putc(8)
+                                                cl = cl + 1
+                                            }
+                                            // Load last command
+                                            let slot = (count - 1) & 7
+                                            let hbase = 0x47004000 + slot * 128
+                                            cmd_clear()
+                                            let mut hi = 0
+                                            let mut hc = volatile_read_u8(hbase)
+                                            while hc != 0 {
+                                                cmd_push(hc)
+                                                putc(hc)
+                                                hi = hi + 1
+                                                hc = volatile_read_u8(hbase + hi)
+                                            }
+                                        }
+                                    }
+                                    // Down arrow (c3==66), Left (67), Right (68) — ignore for now
+                                }
+                            }
+                        }
+                    } else {
                         if c >= 32 {
                             cmd_push(c)
                             putc(c)
                         }
+                    }
+                    }
+                    }
+                    }
                     }
                 }
             }
