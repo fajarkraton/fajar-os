@@ -2573,9 +2573,15 @@ fn cmd_ipc() {
     sched_write_proc(PROC_TABLE_BASE + 8, STATE_RUNNING)
     sched_write_proc(CUR_PID, 0)
 
-    // Clear mailboxes
-    sched_write_proc(ipc_mailbox_addr(4), 0)
-    sched_write_proc(ipc_mailbox_addr(5), 0)
+    // Clear mailbox queues (count=0, head=0, tail=0)
+    let mut mb = 0
+    while mb < 8 {
+        let mba = ipc_mailbox_addr(mb)
+        sched_write_proc(mba, 0)
+        sched_write_proc(mba + 8, 0)
+        sched_write_proc(mba + 16, 0)
+        mb = mb + 1
+    }
 
     // Create sender (PID 4) and receiver (PID 5)
     create_process(4, fn_addr(process_sender))
@@ -3690,6 +3696,8 @@ fn func_table_init() {
     volatile_write(FUNC_TABLE_BASE + 56, fn_addr(process_sender))
     volatile_write(FUNC_TABLE_BASE + 64, 114)
     volatile_write(FUNC_TABLE_BASE + 72, fn_addr(process_receiver))
+    volatile_write(FUNC_TABLE_BASE + 80, 116)  // 't'
+    volatile_write(FUNC_TABLE_BASE + 88, fn_addr(process_t))
 }
 
 fn func_table_lookup(name_char: i64) -> i64 {
@@ -3727,11 +3735,10 @@ fn find_free_pid() -> i64 {
 // IPC Mailbox System
 // ═══════════════════════════════════════════════════════════════════
 // Each process has a mailbox at 0x47002000 + pid * 64
-// Mailbox layout (64 bytes):
-//   [0]  has_message: 0=empty, 1=message waiting
+// Mailbox: single-message per process (64 bytes each)
+//   [0]  has_message (0=empty, 1=has)
 //   [8]  sender_pid
-//   [16] value (single i64 message for simplicity)
-//   [24] reserved
+//   [16] value
 
 const IPC_MAILBOX_BASE: i64 = 0x47002000
 const IPC_MAILBOX_SIZE: i64 = 64
@@ -3740,41 +3747,41 @@ fn ipc_mailbox_addr(pid: i64) -> i64 {
     IPC_MAILBOX_BASE + pid * IPC_MAILBOX_SIZE
 }
 
-// Send message to destination process
 fn ipc_send(dest_pid: i64, value: i64) -> i64 {
-    if dest_pid < 0 { return -1 }
-    if dest_pid > 7 { return -1 }
-    let mbox = ipc_mailbox_addr(dest_pid)
-    let sender = sched_read_proc(CUR_PID)
-    sched_write_proc(mbox, 1)           // has_message = 1
-    sched_write_proc(mbox + 8, sender)  // sender_pid
-    sched_write_proc(mbox + 16, value)  // message value
-
-    // Wake destination if BLOCKED
-    let dest_base = PROC_TABLE_BASE + dest_pid * PROC_SLOT_SIZE
-    let dest_state = sched_read_proc(dest_base + 8)
-    if dest_state == 3 {
-        // BLOCKED → READY
-        sched_write_proc(dest_base + 8, STATE_READY)
+    if dest_pid < 0 { 0 }
+    else {
+        if dest_pid > 7 { 0 }
+        else {
+            let mbox = ipc_mailbox_addr(dest_pid)
+            let sender = sched_read_proc(CUR_PID)
+            sched_write_proc(mbox, 1)
+            sched_write_proc(mbox + 8, sender)
+            sched_write_proc(mbox + 16, value)
+            // Wake if BLOCKED
+            let dest_base = PROC_TABLE_BASE + dest_pid * PROC_SLOT_SIZE
+            let dest_state = sched_read_proc(dest_base + 8)
+            if dest_state == 3 {
+                sched_write_proc(dest_base + 8, STATE_READY)
+            }
+            0
+        }
     }
-    0
 }
 
-// Receive message (returns value, or blocks if no message)
 fn ipc_recv() -> i64 {
     let my_pid = sched_read_proc(CUR_PID)
     let mbox = ipc_mailbox_addr(my_pid)
     let has_msg = sched_read_proc(mbox)
     if has_msg == 1 {
         let value = sched_read_proc(mbox + 16)
-        sched_write_proc(mbox, 0)  // clear mailbox
+        sched_write_proc(mbox, 0)
         value
     } else {
-        // No message — block and yield
+        // Block and yield
         let my_base = PROC_TABLE_BASE + my_pid * PROC_SLOT_SIZE
-        sched_write_proc(my_base + 8, 3)  // BLOCKED
+        sched_write_proc(my_base + 8, 3)
         sched_switch()
-        // When we wake up, check again
+        // Woken — read message
         let value2 = sched_read_proc(mbox + 16)
         sched_write_proc(mbox, 0)
         value2
@@ -3826,7 +3833,6 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
         }
 
         if syscall_num == SYS_IPC_RECV {
-            // ipc_recv() → blocks if no message
             let value = ipc_recv()
             syscall_set_return(value)
         }
@@ -3929,6 +3935,13 @@ fn process_b() -> i64 {
     0
 }
 
+// Process T: minimal syscall test (print 'T' via SVC then exit)
+fn process_t() -> i64 {
+    svc(1, 84, 0)  // SYS_WRITE 'T'
+    svc(0, 0, 0)   // SYS_EXIT
+    0
+}
+
 // Process C: uses syscalls (SVC) instead of direct UART access
 fn process_c() -> i64 {
     let mut i = 0
@@ -3962,17 +3975,17 @@ fn process_sender() -> i64 {
     0
 }
 
-// Process E: IPC receiver — prints 'R' for each received message
+// Process E: IPC receiver — prints received messages
 fn process_receiver() -> i64 {
     let mut i = 0
-    while i < 10 {
-        // Print 'R' via syscall (test that SVC works in this process)
-        svc(1, 82, 0)      // SYS_WRITE, char='R'
-        // Try to receive message
-        svc(5, 0, 0)        // SYS_IPC_RECV (may block)
+    while i < 5 {
+        // Receive a message (blocks if none available)
+        let msg = svc(5, 0, 0)  // SYS_IPC_RECV
+        // Print what we got
+        svc(1, 82, 0)           // SYS_WRITE 'R' to confirm recv
         i = i + 1
     }
-    svc(0, 0, 0)  // SYS_EXIT
+    svc(0, 0, 0)
     0
 }
 
@@ -4011,61 +4024,52 @@ fn create_process(pid: i64, entry: i64) {
     sched_write_proc(base + 16, frame_sp) // [16] = SP
     sched_write_proc(base + 24, entry)    // [24] = PC (for display)
 
-    // Create per-process page table (copy kernel L0 entry)
-    // For now, all processes share the same mapping (identity)
-    // but each has its own L0 table for future isolation
-    let proc_l0 = mmu_pt_alloc()
-    // Copy kernel L0[0] entry (shared L1 table pointer)
-    let kernel_l0 = volatile_read(0x4700F108)  // saved kernel L0 addr
-    let l0_entry = volatile_read(kernel_l0)    // L0[0] → L1 pointer
-    volatile_write(proc_l0, l0_entry)          // same L1 for this process
-    sched_write_proc(base + 64, proc_l0)       // [64] = TTBR0
+    // Share kernel page table (all processes use same TTBR0 for now)
+    let kernel_l0 = volatile_read(0x4700F108)
+    sched_write_proc(base + 64, kernel_l0)     // [64] = TTBR0 (shared)
 }
 
-// Simple round-robin scheduler (called from IRQ handler)
+// Simple round-robin scheduler (called from IRQ and SVC handlers)
 fn sched_switch() {
     let cur = sched_read_proc(CUR_PID)
     let saved_sp = sched_get_saved_sp()
 
-    // Save current process SP
-    let cur_base = PROC_TABLE_BASE + cur * PROC_SLOT_SIZE
-    sched_write_proc(cur_base + 16, saved_sp)
+    if saved_sp > 0 {
+        // Save current process SP
+        let cur_base = PROC_TABLE_BASE + cur * PROC_SLOT_SIZE
+        sched_write_proc(cur_base + 16, saved_sp)
 
-    // Mark current as READY (if still RUNNING)
-    let cur_state = sched_read_proc(cur_base + 8)
-    if cur_state == STATE_RUNNING {
-        sched_write_proc(cur_base + 8, STATE_READY)
-    }
-
-    // Find next READY process (round-robin)
-    let mut next = cur + 1
-    let mut found = 0
-    let mut checked = 0
-    while checked < 8 {
-        if next > 7 { next = 0 }
-        let next_base = PROC_TABLE_BASE + next * PROC_SLOT_SIZE
-        let next_state = sched_read_proc(next_base + 8)
-        if next_state == STATE_READY {
-            found = 1
-            checked = 8
-        } else {
-            next = next + 1
-            checked = checked + 1
+        // Mark current as READY (if still RUNNING)
+        let cur_state = sched_read_proc(cur_base + 8)
+        if cur_state == STATE_RUNNING {
+            sched_write_proc(cur_base + 8, STATE_READY)
         }
-    }
 
-    // If found a different process, switch to it
-    if found == 1 {
-        let next_base = PROC_TABLE_BASE + next * PROC_SLOT_SIZE
-        sched_write_proc(next_base + 8, STATE_RUNNING)
-        sched_write_proc(CUR_PID, next)
-        let next_sp = sched_read_proc(next_base + 16)
-        // Switch page tables (TTBR0) for process isolation
-        let next_ttbr0 = sched_read_proc(next_base + 64)
-        if next_ttbr0 > 0 {
-            switch_ttbr0(next_ttbr0)
+        // Find next READY process (round-robin)
+        let mut next = cur + 1
+        let mut found = 0
+        let mut checked = 0
+        while checked < 8 {
+            if next > 7 { next = 0 }
+            let next_base = PROC_TABLE_BASE + next * PROC_SLOT_SIZE
+            let next_state = sched_read_proc(next_base + 8)
+            if next_state == STATE_READY {
+                found = 1
+                checked = 8
+            } else {
+                next = next + 1
+                checked = checked + 1
+            }
         }
-        sched_set_next_sp(next_sp)
+
+        // If found a different process, switch to it
+        if found == 1 {
+            let next_base = PROC_TABLE_BASE + next * PROC_SLOT_SIZE
+            sched_write_proc(next_base + 8, STATE_RUNNING)
+            sched_write_proc(CUR_PID, next)
+            let next_sp = sched_read_proc(next_base + 16)
+            sched_set_next_sp(next_sp)
+        }
     }
 }
 
@@ -4134,6 +4138,16 @@ fn kernel_main() -> i64 {
     volatile_write(IRQ_COUNT_ADDR, 0)
     volatile_write(CTX_SWITCH_SP, 0)
     volatile_write(SAVED_SP_ADDR, 0)
+
+    // Init IPC mailbox queues (all zeroed)
+    let mut mb_init = 0
+    while mb_init < 8 {
+        let mba = ipc_mailbox_addr(mb_init)
+        volatile_write(mba, 0)
+        volatile_write(mba + 8, 0)
+        volatile_write(mba + 16, 0)
+        mb_init = mb_init + 1
+    }
 
     // Init process function table (for spawn command)
     func_table_init()
