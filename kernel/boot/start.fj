@@ -158,18 +158,24 @@ fn cmd_help() {
 }
 
 fn cmd_ps() {
-    println("PID STATE")
-    println("--- -----")
+    println("PID STATE  TICKS")
+    println("--- -----  -----")
     let mut p = 0
     while p < 8 {
         let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
         let st = volatile_read(base + 8)
         if st != STATE_FREE {
-            putc(32) putc(48 + p) putc(32) putc(32)
+            print(" ")
+            putc(48 + p)
+            print("  ")
             if st == STATE_READY { print("READY") }
             if st == STATE_RUNNING { print("*RUN*") }
             if st == 3 { print("BLOCK") }
             if st == 4 { print(" DEAD") }
+            // Ticks
+            print("  ")
+            let ticks = volatile_read(base + 80)
+            print_num(ticks)
             nl()
         }
         p = p + 1
@@ -868,23 +874,42 @@ fn cmd_is_top() -> i64 {
 }
 
 fn cmd_top() {
-    println("PID ST")
+    // Get total ticks for CPU% calculation
+    let total_irqs = volatile_read(0x47001020)
+    println("PID ST  TICKS  CPU%")
+    println("--- --  -----  ----")
     let mut p = 0
-    while p < 3 {
-        let st = volatile_read(0x47000000 + p * 256 + 8)
-        putc(48 + p)
-        print("  ")
-        if st == 0 { putc(45) }
-        if st == 1 { putc(82) }
-        if st == 2 { putc(42) }
-        if st == 3 { putc(68) }
-        nl()
+    while p < 8 {
+        let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
+        let st = volatile_read(base + 8)
+        if st != STATE_FREE {
+            putc(48 + p)
+            print("   ")
+            if st == 0 { putc(45) }
+            if st == 1 { putc(82) }
+            if st == 2 { print("*") }
+            if st == 3 { putc(66) }
+            if st == 4 { putc(68) }
+            print("   ")
+            let ticks = volatile_read(base + 80)
+            print_num(ticks)
+            // CPU% = ticks * 100 / total_irqs
+            if total_irqs > 0 {
+                print("    ")
+                let pct = ticks * 100 / total_irqs
+                print_num(pct)
+                print("%")
+            }
+            nl()
+        }
         p = p + 1
     }
     print("Up: ")
     let ms = uptime_ms()
     print_num(ms)
-    println("ms")
+    print("ms  IRQs: ")
+    print_num(total_irqs)
+    nl()
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2415,8 +2440,9 @@ fn cmd_spawn() {
             print("No PID") nl()
         }
     } else {
-        // "Unknown: X"
-        putc(63) putc(32) putc(name_char) nl()
+        print("? ")
+        putc(name_char)
+        nl()
     }
 }
 
@@ -2441,10 +2467,7 @@ fn cmd_demo() {
     create_process(2, fn_addr(process_b))
     create_process(3, fn_addr(process_c))
 
-    // "PID1:A PID2:B PID3:C(syscall)"
-    putc(49) putc(58) putc(65) putc(32)
-    putc(50) putc(58) putc(66) putc(32)
-    putc(51) putc(58) putc(67) putc(40) putc(115) putc(118) putc(99) putc(41) nl()
+    println("1:A 2:B 3:C(svc)")
 }
 
 fn cmd_is_ls() -> i64 {
@@ -3876,9 +3899,15 @@ fn fj_exception_irq() {
 
     if irq == 30 {
         timer_set(625000)
-        // Increment IRQ counter
+        // Increment global IRQ counter
         let count = sched_read_proc(0x47001020)
         sched_write_proc(0x47001020, count + 1)
+
+        // Increment per-process tick counter for current process
+        let cur_pid = sched_read_proc(CUR_PID)
+        let tick_addr = PROC_TABLE_BASE + cur_pid * PROC_SLOT_SIZE + 80
+        let cur_ticks = sched_read_proc(tick_addr)
+        sched_write_proc(tick_addr, cur_ticks + 1)
 
         // Check wait-wake: if any BLOCKED process waits for a TERMINATED one, wake it
         let mut wp = 0
