@@ -2509,11 +2509,18 @@ fn cmd_spawn() {
     if entry > 0 {
         let pid = find_free_pid()
         if pid > 0 {
-            create_process(pid, entry)
-            // "Spawned PID N"
-            putc(80) putc(73) putc(68) putc(32)
-            putc(48 + pid)
-            nl()
+            // 'u' = EL0 user process, others = EL1
+            if name_char == 117 {
+                create_process_el0(pid, entry)
+                print("PID ")
+                putc(48 + pid)
+                println(" (EL0)")
+            } else {
+                create_process(pid, entry)
+                print("PID ")
+                putc(48 + pid)
+                nl()
+            }
         } else {
             // "No free PID"
             print("No PID") nl()
@@ -3553,6 +3560,8 @@ fn func_table_init() {
     volatile_write(FUNC_TABLE_BASE + 72, fn_addr(process_receiver))
     volatile_write(FUNC_TABLE_BASE + 80, 116)  // 't'
     volatile_write(FUNC_TABLE_BASE + 88, fn_addr(process_t))
+    volatile_write(FUNC_TABLE_BASE + 96, 117)  // 'u' = EL0 user process
+    volatile_write(FUNC_TABLE_BASE + 104, fn_addr(process_user))
 }
 
 fn func_table_lookup(name_char: i64) -> i64 {
@@ -3874,6 +3883,30 @@ fn process_receiver() -> i64 {
     0
 }
 
+// Create EL0 process (user space, unprivileged)
+fn create_process_el0(pid: i64, entry: i64) {
+    create_process(pid, entry)
+    // Override SPSR: M[3:0]=0000 (EL0t), DAIF=0 (IRQs enabled)
+    let stack_top = 0x48000000 + (pid + 1) * 0x10000 - 16
+    let frame_sp = stack_top - 272
+    sched_write_proc(frame_sp + 256, 0)  // SPSR = EL0t
+    // Set SP_EL0 for this process (user stack, midpoint of 64KB)
+    let user_sp = 0x48000000 + (pid + 1) * 0x10000 - 0x8000
+    // Use the compiler-generated MSR stub for SP_EL0
+    asm!("msr SP_EL0, x0", in("x0") user_sp)
+}
+
+// Process U: runs at EL0, uses SVC for everything
+fn process_user() -> i64 {
+    svc(1, 85, 0)   // SYS_WRITE 'U'
+    svc(1, 83, 0)   // SYS_WRITE 'S'
+    svc(1, 69, 0)   // SYS_WRITE 'E'
+    svc(1, 82, 0)   // SYS_WRITE 'R'
+    svc(1, 33, 0)   // SYS_WRITE '!'
+    svc(0, 0, 0)    // SYS_EXIT
+    0
+}
+
 // Process table constants
 const PROC_TABLE_BASE: i64 = 0x47000000
 const PROC_SLOT_SIZE: i64 = 256
@@ -3905,9 +3938,10 @@ fn create_process(pid: i64, entry: i64) {
     sched_write_proc(frame_sp + 240, 0)
     // [frame_sp + 248] = ELR_EL1 = entry point
     sched_write_proc(frame_sp + 248, entry)
-    // [frame_sp + 256] = SPSR_EL1 = EL1h + IRQs enabled
-    // SPSR: M[3:0]=0101 (EL1h), DAIF=0 (all interrupts enabled)
-    sched_write_proc(frame_sp + 256, 5)
+    // [frame_sp + 256] = SPSR_EL1
+    // For EL1 processes: M[3:0]=0101 (EL1h), DAIF=0
+    // For EL0 processes: M[3:0]=0000 (EL0t), DAIF=0
+    sched_write_proc(frame_sp + 256, 5)  // default: EL1
 
     // Save initial SP in process table
     sched_write_proc(base + 16, frame_sp) // [16] = SP
