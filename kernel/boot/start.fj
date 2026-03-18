@@ -3891,9 +3891,10 @@ fn create_process(pid: i64, entry: i64) {
 
     // Set up initial context frame (256 bytes)
     // Zero all register slots
-    let frame_sp = stack_top - 256
+    // Context frame is 272 bytes (matches SAVE_CONTEXT/RESTORE_CONTEXT)
+    let frame_sp = stack_top - 272
     let mut off = 0
-    while off < 240 {
+    while off < 272 {
         sched_write_proc(frame_sp + off, 0)
         off = off + 8
     }
@@ -3901,6 +3902,9 @@ fn create_process(pid: i64, entry: i64) {
     sched_write_proc(frame_sp + 240, 0)
     // [frame_sp + 248] = ELR_EL1 = entry point
     sched_write_proc(frame_sp + 248, entry)
+    // [frame_sp + 256] = SPSR_EL1 = EL1h + IRQs enabled
+    // SPSR: M[3:0]=0101 (EL1h), DAIF=0 (all interrupts enabled)
+    sched_write_proc(frame_sp + 256, 5)
 
     // Save initial SP in process table
     sched_write_proc(base + 16, frame_sp) // [16] = SP
