@@ -3488,6 +3488,86 @@ fn execute_cmd() {
 // GICv3 Interrupt Controller (inline for single-file build)
 // ═══════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════
+// MMU — 2MB Block Mapping (fast identity-map for bare-metal)
+// ═══════════════════════════════════════════════════════════════════
+//
+// Uses L0→L1→L2 with 2MB block entries (no L3 needed).
+// 2MB block = 512 pages. 128 blocks = 256MB.
+//
+// Memory map (identity-mapped):
+//   0x00000000-0x0FFFFFFF (256MB) → Device-nGnRnE (MMIO: GIC, UART, VirtIO)
+//   0x40000000-0x4FFFFFFF (256MB) → Normal WB (kernel code/data/heap/stacks)
+//
+// Page table allocation: bump from 0x46000000
+// MAIR: idx0=0x00 (Device), idx1=0xFF (Normal WB)
+// TCR: T0SZ=16, 4KB granule, inner shareable
+//
+// Entry format (2MB block at L2):
+//   [47:21] = output address (2MB aligned)
+//   [1] = 0 (block, not table)
+//   [0] = 1 (valid)
+//   + AF, SH, AP, AttrIndx flags
+
+const PT_BUMP_ADDR: i64 = 0x4700F100  // bump allocator pointer
+
+fn mmu_pt_alloc() -> i64 {
+    let addr = volatile_read(PT_BUMP_ADDR)
+    volatile_write(PT_BUMP_ADDR, addr + 4096)
+    // Zero 4KB page table
+    let mut i = 0
+    while i < 4096 {
+        volatile_write(addr + i, 0)
+        i = i + 8
+    }
+    addr
+}
+
+fn mmu_init() {
+    // Init page table bump allocator at 0x46000000
+    volatile_write(PT_BUMP_ADDR, 0x46000000)
+
+    // L0 table (512 entries, each covers 512GB)
+    let l0 = mmu_pt_alloc()
+
+    // L0[0] → L1 table (covers 0x00-0x7F_FFFF_FFFF, first 512GB)
+    // BOTH MMIO (0x00) and kernel (0x40) are within this range
+    let l1 = mmu_pt_alloc()
+    volatile_write(l0 + 0 * 8, l1 | 3)  // valid + table
+
+    // L1 entries: each covers 1GB
+    // L1[0] → L2 for 0x00000000-0x3FFFFFFF (MMIO region)
+    let l2_mmio = mmu_pt_alloc()
+    volatile_write(l1 + 0 * 8, l2_mmio | 3)  // valid + table
+
+    // L1[1] → L2 for 0x40000000-0x7FFFFFFF (kernel region)
+    let l2_kern = mmu_pt_alloc()
+    volatile_write(l1 + 1 * 8, l2_kern | 3)  // valid + table
+
+    // Map MMIO: 128 × 2MB blocks (256MB) as Device-nGnRnE
+    // Flags: valid(1) | block(0) | AF(1<<10) | SH_inner(3<<8) | AttrIdx0 = 0x701
+    let mut i = 0
+    while i < 128 {
+        let paddr = i * 0x200000
+        volatile_write(l2_mmio + i * 8, paddr | 0x701)
+        i = i + 1
+    }
+
+    // Map kernel: 128 × 2MB blocks (256MB) as Normal WB
+    // Flags: valid(1) | block(0) | AF(1<<10) | SH_inner(3<<8) | AttrIdx1(1<<2) = 0x705
+    let mut k = 0
+    while k < 128 {
+        let paddr = 0x40000000 + k * 0x200000
+        volatile_write(l2_kern + k * 8, paddr | 0x705)
+        k = k + 1
+    }
+
+    // Enable MMU: mmu_enable(mair, tcr, ttbr0)
+    // MAIR: idx0=0x00(Device), idx1=0xFF(Normal WB) → 0xFF00
+    // TCR: T0SZ=16, TG0=4KB, SH0=inner, ORGN0=WB, IRGN0=WB → 0x803510
+    mmu_enable(0xFF00, 0x803510, l0)
+}
+
 fn gic_init() {
     // GICD: Disable distributor, clear SPIs, set group 1, enable
     let gicd = 0x08000000
@@ -4019,10 +4099,15 @@ fn kernel_main() -> i64 {
     // Init RAM filesystem
     fs_init()
 
+    // Init MMU (identity-map MMIO + kernel, enable caches)
+    mmu_init()
+
     // Init dmesg
     volatile_write(0x47007F00, 0)
     // Log: "BOOT"
     dmesg_log(66, 79, 79, 84)
+    // Log: "MMU "
+    dmesg_log(77, 77, 85, 32)
 
     // Init GICv3 interrupt controller
     gic_init()
