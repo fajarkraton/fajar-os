@@ -32,7 +32,9 @@ qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a76 -m 512M \
 | FAT filesystem + VirtIO block device | ✅ |
 | Process lifecycle (spawn/wait/kill/ps) | ✅ |
 | GICv3 interrupt controller | ✅ |
-| SPSR_EL1 save/restore in exception frames | ✅ |
+| SPSR_EL1 save/restore (272-byte frames) | ✅ |
+| **EL0 user space** (unprivileged processes) | ✅ |
+| MMU AP split (kernel EL1 / user EL0) | ✅ |
 
 ## Demo
 
@@ -54,13 +56,13 @@ fjsh> ticks          → 11.3s (1111 IRQs)
 ## Architecture
 
 ```
-User Processes (@safe)              Kernel (@kernel)
+EL0 (User, unprivileged)            EL1 (Kernel, privileged)
 ┌──────────────────┐               ┌──────────────────┐
-│ svc(1, 'C', 0)   │──SVC #0────→ │ SYS_WRITE: putc  │
+│ svc(1, 'U', 0)   │──SVC #0────→ │ SYS_WRITE: putc  │
 │ svc(4, dest, msg) │──SVC #0────→ │ SYS_IPC_SEND     │
 │ svc(0, 0, 0)     │──SVC #0────→ │ SYS_EXIT: term    │
 └──────────────────┘  ←──eret──── └──────────────────┘
-         ↑ Timer IRQ (10ms)
+         ↑ Timer IRQ (EL0→EL1)
          │ sched_switch() → round-robin → context switch
 ```
 
@@ -90,6 +92,17 @@ Commands:
 | 7 | KILL | pid | Terminate process |
 | 8 | WAIT | pid | Wait for exit |
 | 9 | READ | — | Read UART char |
+
+## Hardware Verified (Radxa Dragon Q6A)
+
+| Test | Result |
+|------|--------|
+| Cranelift JIT | fib(40) in **0.65s** (1,246× vs interpreter) |
+| GPIO96 blink | 5 ON/OFF cycles on real hardware |
+| QNN CPU inference | MNIST in **24ms** (42 inf/sec) |
+| QNN GPU inference | MNIST in **262ms** (FP32 on Adreno 643) |
+| FajarOS boot (QEMU) | MMU→GIC→Timer→Shell, all features |
+| EL0 user process | SVC from unprivileged level |
 
 ## Source
 

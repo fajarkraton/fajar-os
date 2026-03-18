@@ -222,4 +222,34 @@ qemu-system-aarch64 \
 
 ---
 
+## EL0 User Space
+
+FajarOS now runs user processes at ARM64 Exception Level 0 (unprivileged),
+with MMU-enforced page table isolation:
+
+```
+EL0 (User)                      EL1 (Kernel)
+┌────────────────┐              ┌──────────────────┐
+│ user_func()    │              │ Syscall handler  │
+│ svc(1,'U',0) ──│──SVC #0────→│ putc('U')        │
+│ svc(0,0,0)   ──│──SVC #0────→│ EXIT + schedule  │
+└────────────────┘  ←──eret──── └──────────────────┘
+
+Page tables: Entry 0 AP=00 (kernel only), Entry 1 AP=01 (user accessible)
+```
+
+## Hardware Verification (Dragon Q6A)
+
+Verified on real Qualcomm QCS6490 (Kryo 670, 8-core ARM64):
+
+| Test | Performance |
+|------|------------|
+| Cranelift JIT | fib(40) in **0.65s** (1,246× speedup) |
+| GPIO96 blink | Real hardware toggle |
+| QNN CPU inference | **24ms** per MNIST inference |
+| QNN GPU inference | **262ms** (Adreno 643 via OpenCL 3.0) |
+| CPU temperature | 58°C idle, 85°C under load |
+
+---
+
 *FajarOS v3.0 "Surya" — the sun rises on a new kind of operating system.*
