@@ -3681,11 +3681,9 @@ fn fj_exception_sync(esr: i64, elr: i64, far: i64) {
         let arg2 = syscall_arg2()
 
         if syscall_num == SYS_EXIT {
-            // Exit current process
             let pid = sched_read_proc(CUR_PID)
             let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
             sched_write_proc(base + 8, 4)  // TERMINATED
-            // Switch to next process
             sched_switch()
         }
 
@@ -3814,9 +3812,14 @@ fn process_b() -> i64 {
     0
 }
 
-// Process T: minimal syscall test (print 'T' via SVC then exit)
+// Process T: use putc for output, svc only for exit
 fn process_t() -> i64 {
-    svc(1, 84, 0)  // SYS_WRITE 'T'
+    putc(84)  // T
+    putc(69)  // E
+    putc(83)  // S
+    putc(84)  // T
+    putc(33)  // !
+    // Exit via SVC
     svc(0, 0, 0)   // SYS_EXIT
     0
 }
