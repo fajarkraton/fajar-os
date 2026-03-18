@@ -158,8 +158,8 @@ fn cmd_help() {
 }
 
 fn cmd_ps() {
-    println("PID STATE  TICKS")
-    println("--- -----  -----")
+    println("PID STATE  TICKS  NAME")
+    println("--- -----  -----  ----")
     let mut p = 0
     while p < 8 {
         let base = PROC_TABLE_BASE + p * PROC_SLOT_SIZE
@@ -176,6 +176,14 @@ fn cmd_ps() {
             print("  ")
             let ticks = volatile_read(base + 80)
             print_num(ticks)
+            // Name
+            print("    ")
+            let name_ch = volatile_read(base + 88)
+            if name_ch > 0 {
+                putc(name_ch)
+            } else {
+                if p == 0 { print("kernel") } else { print("-") }
+            }
             nl()
         }
         p = p + 1
@@ -678,15 +686,31 @@ fn cmd_is_kill() -> i64 {
 fn cmd_kill() {
     let pid = parse_num_from(5)
     if pid == 0 {
-        println("?")
+        println("Cannot kill PID 0")
     } else {
-        if pid > 2 {
-            println("?")
+        if pid > 7 {
+            println("Invalid PID")
         } else {
-            volatile_write(0x47000000 + pid * 256 + 8, 3)
-            print("Killed P")
-            putc(48 + pid)
-            nl()
+            let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
+            let st = volatile_read(base + 8)
+            if st == STATE_FREE {
+                println("PID not active")
+            } else {
+                if st == 4 {
+                    println("Already dead")
+                } else {
+                    volatile_write(base + 8, 4)  // TERMINATED
+                    print("Killed PID ")
+                    putc(48 + pid)
+                    let name_ch = volatile_read(base + 88)
+                    if name_ch > 0 {
+                        print(" [")
+                        putc(name_ch)
+                        print("]")
+                    }
+                    nl()
+                }
+            }
         }
     }
 }
@@ -2383,17 +2407,16 @@ fn cmd_wait() {
             let base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
             let state = volatile_read(base + 8)
             if state == 4 {
-                // Already terminated
-                print("PID ") putc(48 + pid)
-                print(" done") nl() // " done"
+                print("PID ")
+                putc(48 + pid)
+                println(" already exited")
             } else {
                 if state == STATE_FREE {
-                    print("No PID") nl()
+                    println("PID not active")
                 } else {
-                    // Block kernel (PID 0) waiting for target
-                    // We can't actually block PID 0 (it runs the shell)
-                    // Instead, busy-wait with WFI until target terminates
-                    print("wait...") // "wait..."
+                    print("Waiting for PID ")
+                    putc(48 + pid)
+                    print("...")
                     let mut done = 0
                     while done == 0 {
                         asm!("wfi")
@@ -2402,8 +2425,9 @@ fn cmd_wait() {
                         if ts == STATE_FREE { done = 1 }
                     }
                     nl()
-                    print("PID ") putc(48 + pid)
-                    print(" done") nl() // " done"
+                    print("PID ")
+                    putc(48 + pid)
+                    println(" exited")
                 }
             }
         }
@@ -2426,18 +2450,24 @@ fn cmd_spawn() {
             // 'u' = EL0 user process, others = EL1
             if name_char == 117 {
                 create_process_el0(pid, entry)
-                print("PID ")
-                putc(48 + pid)
-                println(" (EL0)")
             } else {
                 create_process(pid, entry)
-                print("PID ")
-                putc(48 + pid)
-                nl()
             }
+            // Store process name in proc table
+            let proc_base = PROC_TABLE_BASE + pid * PROC_SLOT_SIZE
+            volatile_write(proc_base + 88, name_char)
+            // Reset tick counter
+            volatile_write(proc_base + 80, 0)
+            // Print result
+            print("PID ")
+            putc(48 + pid)
+            print(" [")
+            putc(name_char)
+            print("]")
+            if name_char == 117 { print(" EL0") }
+            nl()
         } else {
-            // "No free PID"
-            print("No PID") nl()
+            println("No free PID")
         }
     } else {
         print("? ")
@@ -2462,10 +2492,13 @@ fn cmd_demo() {
     sched_write_proc(pid0_base + 8, STATE_RUNNING)
     sched_write_proc(CUR_PID, 0)
 
-    // Create PID 1 (A=direct), PID 2 (B=direct), PID 3 (C=syscall)
+    // Create PID 1 (A), PID 2 (B), PID 3 (C=syscall)
     create_process(1, fn_addr(process_a))
+    volatile_write(PROC_TABLE_BASE + 1 * PROC_SLOT_SIZE + 88, 65)  // 'A'
     create_process(2, fn_addr(process_b))
+    volatile_write(PROC_TABLE_BASE + 2 * PROC_SLOT_SIZE + 88, 66)  // 'B'
     create_process(3, fn_addr(process_c))
+    volatile_write(PROC_TABLE_BASE + 3 * PROC_SLOT_SIZE + 88, 67)  // 'C'
 
     println("1:A 2:B 3:C(svc)")
 }
