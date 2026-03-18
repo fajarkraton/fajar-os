@@ -3846,7 +3846,8 @@ fn process_sender() -> i64 {
     let mut i = 0
     while i < 10 {
         // Send character 'S' (83) + i to PID 5
-        svc(4, 5, 83 + i)  // SYS_IPC_SEND(4), dest=5, value=83+i
+        // Send to PID 1 (receiver). Convention: spawn r first (PID 1), then s (PID 2)
+        svc(4, 1, 83 + i)  // SYS_IPC_SEND(4), dest=1, value='S'+i
         // Print 's' to show we sent
         svc(1, 115, 0)     // SYS_WRITE, char='s'
         let mut j = 0
