@@ -4172,10 +4172,11 @@ fn kernel_main() -> i64 {
     println("FajarOS v3.0 Surya")
     println("")
 
-    // Process table init: PID 0 = kernel (RUNNING, HIGH priority)
+    // Process table init: PID 0 = kernel (RUNNING, NORMAL priority)
+    // Shell runs at NORMAL so it shares CPU fairly with user processes
     sched_write_proc(PROC_TABLE_BASE, 0)
     sched_write_proc(PROC_TABLE_BASE + 8, STATE_RUNNING)
-    sched_write_proc(PROC_TABLE_BASE + 96, PRIO_HIGH)
+    sched_write_proc(PROC_TABLE_BASE + 96, PRIO_NORMAL)
     sched_write_proc(CUR_PID, 0)
     // Store kernel TTBR0 for PID 0
     let kernel_l0 = volatile_read(0x4700F108)
