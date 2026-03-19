@@ -1,5 +1,30 @@
 # Changelog — FajarOS
 
+## v3.2.0 "Surya Rising" (2026-03-19)
+
+### New Features
+- **`write` command** — create/overwrite files with text content
+- **`append` command** — append text to existing files (with newline separator)
+- **`net` command** — show network status (stub for VirtIO-net)
+- **`display` command** — show display status (stub for framebuffer)
+- **160 shell commands** total (was 152)
+
+### Q6A Hardware Verified
+- **MNIST**: 30/30 correct (100% accuracy), CPU 0.87ms/img
+- **ResNet18**: INT8 CPU 29.5ms/img batch (34 img/s)
+- **GPIO96 blink**: 5 ON/OFF cycles from Fajar Lang
+- **System monitor**: CPU temp/freq/uptime/GPU detection
+- **Edge service**: continuous monitoring with thermal alerts
+- **FajarOS on Q6A**: boots in QEMU, all commands work, 5/5 self-tests pass
+
+### Stats
+```
+LOC:        5,016 (was 4,805)
+Commands:   160 (was 152)
+```
+
+---
+
 ## v3.1.0 "Surya Rising" (2026-03-19)
 
 ### New Features

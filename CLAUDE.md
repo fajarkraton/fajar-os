@@ -106,20 +106,22 @@ ssh radxa@192.168.50.94 "sudo /tmp/fjaros.elf"  # userspace test
 
 ---
 
-## 5. Current Status (v3.1)
+## 5. Current Status (v3.2)
 
 ```
-Kernel LOC:     4,805 (100% Fajar Lang)
-Shell commands: 152
-Syscalls:       17
-Max PIDs:       16
+Kernel LOC:     5,016 (100% Fajar Lang)
+Shell commands: 160
+Syscalls:       17 (EXIT through PIPE_READ)
+Max PIDs:       16 with priority scheduling
 Priority levels: 4 (IDLE, NORMAL, HIGH, REALTIME)
-Services:       3 (UART, Timer, Memory)
-Pipes:          8 × 4KB
-Signals:        SIGTERM, SIGKILL, SIGCHLD
-Page tables:    Per-process TTBR0 switch
+Services:       3 registered (UART, Timer, Memory)
+Pipes:          8 × 4KB circular buffer
+Signals:        SIGTERM(1), SIGKILL(9), SIGCHLD(17)
+Page tables:    Per-process L0, TTBR0 switch on context switch
 EL0:            User processes at unprivileged level
-Faults:         Data/instruction abort handlers
+Faults:         Data/instruction abort → kill process
+Filesystem:     RAM FS (16 slots) + FAT16/32 via VirtIO
+Shell:          Ctrl+C, arrow history, tab completion, [PID] prompt
 ```
 
 ### Plans
