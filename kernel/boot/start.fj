@@ -3653,6 +3653,14 @@ fn execute_cmd() {
             cmd_pipe()
             handled = 1
         }
+        if cmd_is_netstatus() == 1 {
+            cmd_netstatus()
+            handled = 1
+        }
+        if cmd_is_display() == 1 {
+            cmd_display()
+            handled = 1
+        }
         if handled == 0 {
             println("?")
         }
@@ -4132,6 +4140,35 @@ fn pipe_close(pipe_id: i64) {
             volatile_write(addr, 0)
         }
     }
+}
+
+fn cmd_is_netstatus() -> i64 {
+    let len = cmd_len()
+    if len != 3 { 0 }
+    else { if cmd_char(0) == 110 { if cmd_char(1) == 101 { if cmd_char(2) == 116 { 1 } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_netstatus() {
+    println("Network Status:")
+    println("  lo:   127.0.0.1 (loopback)")
+    println("  eth0: not configured")
+    println("  wlan0: not configured")
+    println("  Stack: not implemented")
+    println("  (requires VirtIO-net driver)")
+}
+
+fn cmd_is_display() -> i64 {
+    let len = cmd_len()
+    if len != 7 { 0 }
+    else { if cmd_char(0) == 100 { if cmd_char(1) == 105 { if cmd_char(2) == 115 { if cmd_char(3) == 112 { if cmd_char(4) == 108 { if cmd_char(5) == 97 { if cmd_char(6) == 121 { 1 } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } } else { 0 } }
+}
+
+fn cmd_display() {
+    println("Display Status:")
+    println("  UART:   active (serial console)")
+    println("  VGA:    not available")
+    println("  FB:     not configured")
+    println("  (framebuffer requires display driver)")
 }
 
 fn cmd_is_pipe() -> i64 {
