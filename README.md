@@ -1,4 +1,4 @@
-# FajarOS v3.1 "Surya Rising"
+# FajarOS v3.2 "Surya Rising"
 
 > The world's first operating system written 100% in [Fajar Lang](https://github.com/fajarkraton/fajar-lang) — where kernel safety, hardware drivers, and AI inference share one language, one type system, and one compiler.
 
@@ -33,7 +33,7 @@ qemu-system-aarch64 -M virt,gic-version=3 -cpu cortex-a76 -m 512M \
 | **IPC v2** | 8-message circular queue per process, blocking recv, total_sent tracking | ✅ |
 | **Memory protection** | Data/instruction abort handlers, kill faulting process with address display | ✅ |
 | **Interactive shell** | Ctrl+C, up-arrow history, tab completion, `[PID] fjsh>` prompt | ✅ |
-| **152 shell commands** | ps, top, spawn, kill, wait, nice, pmap, memstat, svclist, signal, pipe, ... | ✅ |
+| **160 shell commands** | ps, top, spawn, kill, wait, nice, pmap, memstat, svclist, signal, pipe, write, append, net, display, ... | ✅ |
 | **Idle process** | PID 15, WFI loop, IDLE priority — runs when no other process READY | ✅ |
 | **Process names** | Stored in process table, shown in ps/kill/spawn/top output | ✅ |
 | **CPU% per process** | Per-process tick counting, CPU% = ticks/total_irqs in `top` | ✅ |
@@ -202,8 +202,8 @@ Commands:
 ## Stats
 
 ```
-Kernel LOC:     4,805 (100% Fajar Lang)
-Shell commands: 152
+Kernel LOC:     5,016 (100% Fajar Lang)
+Shell commands: 160
 Syscalls:       17
 Max PIDs:       16
 Priority levels: 4 (IDLE, NORMAL, HIGH, REALTIME)
@@ -218,7 +218,7 @@ Exception frame: 272 bytes (x0-x30 + SP + ELR + SPSR)
 ## Source
 
 - **Compiler:** [github.com/fajarkraton/fajar-lang](https://github.com/fajarkraton/fajar-lang) (v3.2.0)
-- **OS:** [github.com/fajarkraton/fajar-os](https://github.com/fajarkraton/fajar-os) (v3.1)
+- **OS:** [github.com/fajarkraton/fajar-os](https://github.com/fajarkraton/fajar-os) (v3.2)
 - **Hardware:** [Radxa Dragon Q6A](https://radxa.com/products/dragon/q6a/) (Qualcomm QCS6490)
 
 ## License
